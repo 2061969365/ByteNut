@@ -787,17 +787,12 @@ class BytenutRenewal:
                     for sel in username_selectors:
                         try:
                             sb.wait_for_element_visible(sel, timeout=5)
-                            # 用 JS 设置值并触发 Vue 响应式
-                            sb.execute_script(f"""
-                                var el = document.querySelector('{sel}');
-                                var nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-                                    window.HTMLInputElement.prototype, 'value').set;
-                                nativeInputValueSetter.call(el, '{user}');
-                                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                                el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                            """)
+                            el = sb.find_element(sel)
+                            el.clear()
+                            time.sleep(0.3)
+                            el.send_keys(user)
                             username_found = True
-                            self.log(f"  用户名输入框: {sel}")
+                            self.log(f"  用户名输入框: {sel}  (send_keys)")
                             break
                         except Exception:
                             continue
@@ -815,60 +810,43 @@ class BytenutRenewal:
                     for sel in password_selectors:
                         try:
                             sb.wait_for_element_visible(sel, timeout=3)
-                            # 转义密码中的特殊字符
-                            pwd_escaped = pwd.replace("\\", "\\\\").replace("'", "\\'")
-                            sb.execute_script(f"""
-                                var el = document.querySelector('{sel}');
-                                var nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-                                    window.HTMLInputElement.prototype, 'value').set;
-                                nativeInputValueSetter.call(el, '{pwd_escaped}');
-                                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                                el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                            """)
-                            self.log(f"  密码输入框: {sel}")
+                            el = sb.find_element(sel)
+                            el.clear()
+                            time.sleep(0.3)
+                            el.send_keys(pwd)
+                            self.log(f"  密码输入框: {sel}  (send_keys)")
                             break
                         except Exception:
                             continue
                     # 点击 Sign In 按钮
                     time.sleep(1)
-                    # 先截图看当前状态
                     self.shot(sb, f"pre_login_{idx}.png")
-                    # 尝试多种提交方式
+                    # 尝试多种方式提交
                     submitted = False
-                    # 方式1: 按 Enter 键
-                    try:
-                        pwd_el = sb.find_element('input[type="password"]')
-                        pwd_el.send_keys('\n')
-                        self.log("  提交: Enter 键")
-                        submitted = True
-                    except Exception:
-                        pass
-                    if not submitted:
-                        # 方式2: JS 点击
+                    # 方式1: 找按钮用 JS 点击
+                    for btn_sel in [
+                        '//button[contains(., "Sign In")]',
+                        '//button[contains(text(), "Sign In")]',
+                        '.el-button--primary',
+                        'button[type="submit"]',
+                    ]:
                         try:
-                            sb.execute_script("""
-                                var btns = document.querySelectorAll('button');
-                                for (var i = 0; i < btns.length; i++) {
-                                    if (btns[i].textContent.indexOf('Sign In') !== -1) {
-                                        btns[i].click();
-                                        break;
-                                    }
-                                }
-                            """)
-                            self.log("  提交: JS 点击按钮")
+                            btn = sb.find_element(btn_sel)
+                            sb.execute_script("arguments[0].click();", btn)
+                            self.log(f"  提交: JS click {btn_sel}")
+                            submitted = True
+                            break
+                        except Exception:
+                            continue
+                    if not submitted:
+                        # 方式2: 按 Enter 键
+                        try:
+                            sb.find_element('input[type="password"]').send_keys('\n')
+                            self.log("  提交: Enter 键")
                             submitted = True
                         except Exception:
                             pass
-                    if not submitted:
-                        # 方式3: 直接 click
-                        try:
-                            sb.click('//button[contains(., "Sign In")]')
-                            self.log("  提交: click 按钮")
-                            submitted = True
-                        except Exception:
-                            pass
-                    time.sleep(8)
-                    # 截图看结果
+                    time.sleep(10)
                     self.shot(sb, f"post_login_{idx}.png")
                     if "/auth/login" in sb.get_current_url():
                         self.send_tg("❌", "登录失败", user, "未知",
