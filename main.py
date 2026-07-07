@@ -425,23 +425,52 @@ class BytenutRenewal:
     def _try_click_hcaptcha(self, sb):
         """尝试点击 hCaptcha checkbox"""
         try:
-            # 找到 hCaptcha iframe，计算其位置，用 JS 点击内部 checkbox
+            # 找到 hCaptcha iframe 坐标
             info = sb.execute_script("""
-                var h = document.querySelector('.h-captcha, .hcaptcha, iframe[src*="hcaptcha"]');
+                var h = document.querySelector('.h-captcha iframe, .hcaptcha iframe, iframe[src*="hcaptcha"], .h-captcha, .hcaptcha');
                 if (!h) return null;
                 var r = h.getBoundingClientRect();
                 if (r.width === 0 || r.height === 0) return null;
-                return {
-                    x: r.left + 28,
-                    y: r.top + r.height / 2,
-                    src: h.src || h.getAttribute('src') || ''
-                };
+                return { x: r.left + r.width/2, y: r.top + r.height/2 };
             """)
             if not info:
+                self.log("  hCaptcha 元素不可见")
                 return False
-            self.log(f"hCaptcha iframe @ {info['x']},{info['y']}")
+            x, y = int(info['x']), int(info['y'])
+            self.log(f"  hCaptcha @ {x},{y}")
 
-            # 用 uc_gui_click_captcha 让 seleniumbase 处理
+            # 用 CDP 发送真实鼠标事件（和 Falix 一样）
+            try:
+                import time
+                cmd = sb.driver.execute_cdp_cmd
+                cmd('Input.dispatchMouseEvent', {'type': 'mouseMoved', 'x': x, 'y': y, 'button': 'none', 'buttons': 0, 'modifiers': 0, 'clickCount': 0})
+                time.sleep(0.05)
+                cmd('Input.dispatchMouseEvent', {'type': 'mousePressed', 'x': x, 'y': y, 'button': 'left', 'buttons': 1, 'modifiers': 0, 'clickCount': 1})
+                time.sleep(0.05)
+                cmd('Input.dispatchMouseEvent', {'type': 'mouseReleased', 'x': x, 'y': y, 'button': 'left', 'buttons': 0, 'modifiers': 0, 'clickCount': 1})
+                self.log("  CDP click 完成")
+                return True
+            except Exception as e:
+                self.log(f"  CDP click 失败: {e}")
+
+            # 降级: 切换到 iframe 点击
+            try:
+                for f in sb.driver.find_elements('css selector', 'iframe[src*="hcaptcha"]'):
+                    sb.driver.switch_to.frame(f)
+                    for sel in ['#checkbox', '.checkbox', '[role="checkbox"]', 'div[tabindex]']:
+                        els = sb.driver.find_elements('css selector', sel)
+                        for el in els:
+                            if el.is_displayed() and el.is_enabled():
+                                el.click()
+                                self.log(f"  iframe click: {sel}")
+                                sb.driver.switch_to.default_content()
+                                return True
+                    sb.driver.switch_to.default_content()
+            except Exception:
+                try: sb.driver.switch_to.default_content()
+                except: pass
+
+            # 再降级: uc_gui_click_captcha
             sb.uc_gui_click_captcha()
             return True
         except Exception as e:
