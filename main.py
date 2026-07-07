@@ -814,31 +814,45 @@ class BytenutRenewal:
                             continue
                     # 点击 Sign In 按钮
                     time.sleep(1)
-                    sign_in_selectors = [
-                        '//button[contains(., "Sign In")]',
-                        '//button[contains(text(), "Sign In")]',
-                        '.el-button--primary',
-                        'button[type="submit"]',
-                    ]
-                    clicked = False
-                    for sel in sign_in_selectors:
+                    # 先截图看当前状态
+                    self.shot(sb, f"pre_login_{idx}.png")
+                    # 尝试多种提交方式
+                    submitted = False
+                    # 方式1: 按 Enter 键
+                    try:
+                        pwd_el = sb.find_element('input[type="password"]')
+                        pwd_el.send_keys('\n')
+                        self.log("  提交: Enter 键")
+                        submitted = True
+                    except Exception:
+                        pass
+                    if not submitted:
+                        # 方式2: JS 点击
                         try:
-                            sb.wait_for_element_visible(sel, timeout=3)
                             sb.execute_script("""
-                                var btn = arguments[0];
-                                btn.scrollIntoView({block:'center'});
-                                btn.click();
-                            """, sb.find_element(sel))
-                            clicked = True
-                            self.log(f"  Sign In 按钮: {sel}")
-                            break
+                                var btns = document.querySelectorAll('button');
+                                for (var i = 0; i < btns.length; i++) {
+                                    if (btns[i].textContent.indexOf('Sign In') !== -1) {
+                                        btns[i].click();
+                                        break;
+                                    }
+                                }
+                            """)
+                            self.log("  提交: JS 点击按钮")
+                            submitted = True
                         except Exception:
-                            continue
-                    if not clicked:
-                        self.log("❌ 找不到 Sign In 按钮")
-                        self.shot(sb, f"login_no_button_{idx}.png")
-                        continue
+                            pass
+                    if not submitted:
+                        # 方式3: 直接 click
+                        try:
+                            sb.click('//button[contains(., "Sign In")]')
+                            self.log("  提交: click 按钮")
+                            submitted = True
+                        except Exception:
+                            pass
                     time.sleep(8)
+                    # 截图看结果
+                    self.shot(sb, f"post_login_{idx}.png")
                     if "/auth/login" in sb.get_current_url():
                         self.send_tg("❌", "登录失败", user, "未知",
                                      "未知", "",
