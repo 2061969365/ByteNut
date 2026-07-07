@@ -112,6 +112,38 @@ class BytenutRenewal:
         except Exception as e:
             self.log(f"TG发送失败: {e}")
 
+    # ========== API 登录 ==========
+    API_LOGIN = "https://www.bytenut.com/api/auth/login"
+
+    def api_login(self, user, pwd):
+        """直接用 API 登录，返回 token，失败返回 None"""
+        try:
+            resp = requests.post(
+                self.API_LOGIN,
+                json={"username": user, "password": pwd, "rememberMe": True},
+                headers={"Accept": "application/json"},
+                proxies={"http": PROXY, "https": PROXY} if PROXY else None,
+                timeout=30,
+            )
+            data = resp.json()
+            if data.get("code") == 200:
+                token = data.get("data", {}).get("token") or data.get("data", {}).get("yl-token")
+                if token:
+                    self.log(f"  API 登录成功，token 长度: {len(token)}")
+                    return token
+            self.log(f"  API 登录失败: {data.get('message', resp.status_code)}")
+        except Exception as e:
+            self.log(f"  API 登录异常: {e}")
+        return None
+
+    def set_token_in_browser(self, sb, token):
+        """在浏览器中设置登录 token"""
+        sb.execute_script(f"""
+            localStorage.setItem('yl-token', '{token}');
+            sessionStorage.setItem('yl-token', '{token}');
+        """)
+        self.log("  Token 已写入浏览器")
+
     # ========== 浏览器内 fetch（变量嵌入脚本）==========
     def fetch_api(self, sb, url, method="GET", referer=None):
         """
@@ -770,123 +802,132 @@ class BytenutRenewal:
                 proxy=PROXY,
             ) as sb:
                 try:
-                    # --- 登录 ---
-                    sb.uc_open_with_reconnect(URL_LOGIN_PANEL, reconnect_time=5)
-                    time.sleep(3)
-                    self.dismiss_cookie_consent(sb)
-                    time.sleep(1)
-                    # 用多种方式尝试找到用户名输入框
-                    username_selectors = [
-                        'input[placeholder="Username"]',
-                        'input[placeholder*="username" i]',
-                        'input[placeholder*="Username"]',
-                        '.el-input__inner[type="text"]',
-                        'input[type="text"]',
-                    ]
-                    username_found = False
-                    for sel in username_selectors:
-                        try:
-                            sb.wait_for_element_visible(sel, timeout=5)
-                            el = sb.find_element(sel)
-                            # 聚焦再输入，逐个字符触发 Vue
-                            sb.execute_script("arguments[0].focus(); arguments[0].select();", el)
-                            for ch in user:
-                                el.send_keys(ch)
-                                time.sleep(0.05)
-                            username_found = True
-                            self.log(f"  用户名输入框: {sel}  (slow type)")
-                            break
-                        except Exception:
-                            continue
-                    if not username_found:
-                        self.log("❌ 找不到用户名输入框")
-                        self.shot(sb, f"login_no_username_{idx}.png")
-                        continue
-                    # 用多种方式尝试找到密码输入框
-                    password_selectors = [
-                        'input[placeholder="Password"]',
-                        'input[placeholder*="password" i]',
-                        'input[placeholder*="Password"]',
-                        'input[type="password"]',
-                    ]
-                    for sel in password_selectors:
-                        try:
-                            sb.wait_for_element_visible(sel, timeout=3)
-                            el = sb.find_element(sel)
-                            sb.execute_script("arguments[0].focus(); arguments[0].select();", el)
-                            for ch in pwd:
-                                el.send_keys(ch)
-                                time.sleep(0.05)
-                            # 失焦触发 Vue 验证
-                            sb.execute_script("arguments[0].blur();", el)
-                            self.log(f"  密码输入框: {sel}  (slow type)")
-                            break
-                        except Exception:
-                            continue
-                    # 点击 Sign In 按钮
-                    time.sleep(1)
-                    self.shot(sb, f"pre_login_{idx}.png")
-                    # 尝试多种方式提交
-                    submitted = False
-                    # 方式1: 找按钮用 JS 点击
-                    for btn_sel in [
-                        '//button[contains(., "Sign In")]',
-                        '//button[contains(text(), "Sign In")]',
-                        '.el-button--primary',
-                        'button[type="submit"]',
-                    ]:
-                        try:
-                            btn = sb.find_element(btn_sel)
-                            sb.execute_script("arguments[0].click();", btn)
-                            self.log(f"  提交: JS click {btn_sel}")
-                            submitted = True
-                            break
-                        except Exception:
-                            continue
-                    if not submitted:
-                        # 方式2: 按 Enter 键
-                        try:
-                            sb.find_element('input[type="password"]').send_keys('\n')
-                            self.log("  提交: Enter 键")
-                            submitted = True
-                        except Exception:
-                            pass
-                    if not submitted:
-                        # 方式3: JS 直接提交表单
-                        try:
-                            sb.execute_script("""
-                                var form = document.querySelector('.el-form') 
-                                    || document.querySelector('form');
-                                if (form) {
-                                    form.dispatchEvent(new Event('submit', {bubbles: true}));
-                                }
-                            """)
-                            self.log("  提交: JS form submit")
-                            submitted = True
-                        except Exception:
-                            pass
-                    time.sleep(10)
-                    self.shot(sb, f"post_login_{idx}.png")
-                    if "/auth/login" in sb.get_current_url():
-                        # 即使 URL 没变，检查是否有 token
-                        has_token = sb.execute_script("""
-                            var t = localStorage.getItem('yl-token') 
+                    logged_in = False
+                    # --- API 登录 ---
+                    self.log("--- 尝试 API 登录 ---")
+                    token = self.api_login(user, pwd)
+                    if token:
+                        self.set_token_in_browser(sb, token)
+                        time.sleep(1)
+                        sb.uc_open_with_reconnect(URL_HOMEPAGE, reconnect_time=6)
+                        time.sleep(5)
+                        current_token = sb.execute_script("""
+                            return localStorage.getItem('yl-token') 
                                 || sessionStorage.getItem('yl-token') || '';
-                            return t.length > 10;
                         """)
-                        if has_token:
-                            self.log("✅ 有 token，认为登录成功")
+                        if len(current_token) > 10:
+                            self.log("✅ API 登录成功")
+                            logged_in = True
                         else:
-                            self.send_tg("❌", "登录失败", user, "未知",
-                                         "未知", "",
-                                         screenshot=self.shot(
-                                             sb, f"login_fail_{idx}.png"))
+                            self.log("⚠️ Token 设置未生效")
+                    if not logged_in:
+                        # --- 浏览器登录 ---
+                        self.log("--- 浏览器登录 ---")
+                        sb.uc_open_with_reconnect(URL_LOGIN_PANEL, reconnect_time=5)
+                        time.sleep(3)
+                        self.dismiss_cookie_consent(sb)
+                        time.sleep(1)
+                        # 找用户名输入框
+                        username_selectors = [
+                            'input[placeholder="Username"]',
+                            'input[placeholder*="username" i]',
+                            'input[placeholder*="Username"]',
+                            '.el-input__inner[type="text"]',
+                            'input[type="text"]',
+                        ]
+                        username_found = False
+                        for sel in username_selectors:
+                            try:
+                                sb.wait_for_element_visible(sel, timeout=5)
+                                el = sb.find_element(sel)
+                                sb.execute_script("arguments[0].focus(); arguments[0].select();", el)
+                                for ch in user:
+                                    el.send_keys(ch)
+                                    time.sleep(0.05)
+                                username_found = True
+                                self.log(f"  用户名输入框: {sel}")
+                                break
+                            except Exception:
+                                continue
+                        if not username_found:
+                            self.log("❌ 找不到用户名输入框")
+                            self.shot(sb, f"login_no_username_{idx}.png")
                             continue
-                    self.log("✅ 登录成功")
-
-                    # 停留 homepage 让 CF cookie 稳定
-                    sb.uc_open_with_reconnect(URL_HOMEPAGE, reconnect_time=6)
-                    time.sleep(8)
+                        # 找密码输入框
+                        password_selectors = [
+                            'input[placeholder="Password"]',
+                            'input[placeholder*="password" i]',
+                            'input[placeholder*="Password"]',
+                            'input[type="password"]',
+                        ]
+                        for sel in password_selectors:
+                            try:
+                                sb.wait_for_element_visible(sel, timeout=3)
+                                el = sb.find_element(sel)
+                                sb.execute_script("arguments[0].focus(); arguments[0].select();", el)
+                                for ch in pwd:
+                                    el.send_keys(ch)
+                                    time.sleep(0.05)
+                                sb.execute_script("arguments[0].blur();", el)
+                                self.log(f"  密码输入框: {sel}")
+                                break
+                            except Exception:
+                                continue
+                        # 提交登录
+                        time.sleep(1)
+                        self.shot(sb, f"pre_login_{idx}.png")
+                        submitted = False
+                        for btn_sel in [
+                            '//button[contains(., "Sign In")]',
+                            '//button[contains(text(), "Sign In")]',
+                            '.el-button--primary',
+                            'button[type="submit"]',
+                        ]:
+                            try:
+                                btn = sb.find_element(btn_sel)
+                                sb.execute_script("arguments[0].click();", btn)
+                                self.log(f"  提交: JS click {btn_sel}")
+                                submitted = True
+                                break
+                            except Exception:
+                                continue
+                        if not submitted:
+                            try:
+                                sb.find_element('input[type="password"]').send_keys('\n')
+                                self.log("  提交: Enter 键")
+                                submitted = True
+                            except Exception:
+                                pass
+                        if not submitted:
+                            try:
+                                sb.execute_script("""
+                                    var form = document.querySelector('.el-form') || document.querySelector('form');
+                                    if (form) form.dispatchEvent(new Event('submit', {bubbles: true}));
+                                """)
+                                self.log("  提交: JS form submit")
+                            except Exception:
+                                pass
+                        time.sleep(10)
+                        self.shot(sb, f"post_login_{idx}.png")
+                        if "/auth/login" in sb.get_current_url():
+                            has_token = sb.execute_script("""
+                                var t = localStorage.getItem('yl-token') || sessionStorage.getItem('yl-token') || '';
+                                return t.length > 10;
+                            """)
+                            if has_token:
+                                self.log("✅ 有 token，认为登录成功")
+                                logged_in = True
+                            else:
+                                self.send_tg("❌", "登录失败", user, "未知",
+                                             "未知", "",
+                                             screenshot=self.shot(sb, f"login_fail_{idx}.png"))
+                                continue
+                        else:
+                            logged_in = True
+                        self.log("✅ 登录成功")
+                        # 停留 homepage
+                        sb.uc_open_with_reconnect(URL_HOMEPAGE, reconnect_time=6)
+                        time.sleep(8)
 
                     # --- 获取服务器信息 ---
                     servers = self.get_servers_data(sb)
