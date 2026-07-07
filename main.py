@@ -125,6 +125,10 @@ class BytenutRenewal:
                 proxies={"http": PROXY, "https": PROXY} if PROXY else None,
                 timeout=30,
             )
+            self.log(f"  API 响应状态码: {resp.status_code}")
+            self.log(f"  API 响应头: {dict(resp.headers)}")
+            body_text = resp.text[:500]
+            self.log(f"  API 响应体: {body_text}")
             data = resp.json()
             if data.get("code") == 200:
                 token = data.get("data", {}).get("token") or data.get("data", {}).get("yl-token")
