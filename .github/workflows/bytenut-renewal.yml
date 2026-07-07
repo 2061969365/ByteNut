@@ -347,6 +347,13 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
           xvfb-run -a python3 main.py
 
+      - name: 上传截图
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: artifacts/
+
       - name: 清理历史
         if: always()
         uses: Mattraks/delete-workflow-runs@v2
