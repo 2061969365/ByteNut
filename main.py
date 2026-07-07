@@ -1,6 +1,7 @@
 import time
 import os
 import sys
+import random
 import requests
 import platform
 from datetime import datetime
@@ -323,6 +324,87 @@ class BytenutRenewal:
                 return True
             time.sleep(interval)
         return False
+
+    # ========== Stealth 指纹增强 ==========
+    def _inject_stealth(self, sb):
+        try:
+            sb.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+                "source": """
+                (function() {
+                    // 1. 覆盖 navigator.webdriver
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => undefined,
+                        configurable: true,
+                    });
+
+                    // 2. 模拟 chrome.runtime
+                    window.chrome = window.chrome || {};
+                    window.chrome.runtime = {
+                        onMessage: { addListener: function() {} },
+                        onConnect: { addListener: function() {} },
+                        onInstalled: { addListener: function() {} },
+                        sendMessage: function() {},
+                        connect: function() {
+                            return { onMessage: { addListener: function() {} } };
+                        },
+                        id: 'aohjdmifjbbilmlibpbjggmpoemapnaj',
+                    };
+                    window.chrome.loadTimes = function() { return {}; };
+                    window.chrome.csi = function() { return {}; };
+                    window.chrome.app = {
+                        isInstalled: false,
+                        InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
+                        RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' },
+                    };
+
+                    // 3. navigator.plugins — 模拟真实插件数量
+                    Object.defineProperty(navigator, 'plugins', {
+                        get: () => [
+                            { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
+                            { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
+                            { name: 'Native Client', filename: 'internal-nacl-plugin' },
+                        ],
+                        configurable: true,
+                    });
+
+                    // 4. 设置真实语言列表
+                    Object.defineProperty(navigator, 'languages', {
+                        get: () => ['en-US', 'en'],
+                        configurable: true,
+                    });
+
+                    // 5. CPU 核心数 / 内存
+                    Object.defineProperty(navigator, 'hardwareConcurrency', {
+                        get: () => 8,
+                        configurable: true,
+                    });
+                    Object.defineProperty(navigator, 'deviceMemory', {
+                        get: () => 8,
+                        configurable: true,
+                    });
+
+                    // 6. 删除 CDP 注入痕迹
+                    for (var key in window) {
+                        if (key.startsWith('$cdc_') || key.startsWith('$chrome_')) {
+                            try { delete window[key]; } catch(e) {}
+                        }
+                    }
+
+                    // 7. WebGL 伪装
+                    try {
+                        var getParameter = WebGLRenderingContext.prototype.getParameter;
+                        WebGLRenderingContext.prototype.getParameter = function(param) {
+                            if (param === 37445) return 'Intel Inc.';
+                            if (param === 37446) return 'Intel Iris OpenGL Engine';
+                            return getParameter.call(this, param);
+                        };
+                    } catch(e) {}
+                })();
+                """
+            })
+            self.log("[OK] Stealth 指纹注入完成")
+        except Exception as e:
+            self.log(f"[WARN] Stealth 注入失败: {e}")
 
     # ========== Cookie 弹窗处理 ==========
     def dismiss_cookie_consent(self, sb):
@@ -946,10 +1028,14 @@ class BytenutRenewal:
                 uc=True, test=True, headed=True,
                 chromium_arg=(
                     "--no-sandbox,--disable-dev-shm-usage,"
-                    "--disable-gpu,--window-size=1280,753"
+                    "--disable-gpu,--window-size=1280,753,"
+                    "--disable-blink-features=AutomationControlled,"
+                    "--disable-automation,"
+                    "--no-first-run,--no-default-browser-check"
                 ),
                 proxy=PROXY,
             ) as sb:
+                self._inject_stealth(sb)
                 try:
                     logged_in = False
                     # --- API 登录 ---
@@ -993,7 +1079,7 @@ class BytenutRenewal:
                                 sb.execute_script("arguments[0].focus(); arguments[0].select();", el)
                                 for ch in user:
                                     el.send_keys(ch)
-                                    time.sleep(0.05)
+                                    time.sleep(random.uniform(0.04, 0.12))
                                 username_found = True
                                 self.log(f"  用户名输入框: {sel}")
                                 break
@@ -1018,7 +1104,7 @@ class BytenutRenewal:
                                 sb.execute_script("arguments[0].focus(); arguments[0].select();", el)
                                 for ch in pwd:
                                     el.send_keys(ch)
-                                    time.sleep(0.05)
+                                    time.sleep(random.uniform(0.04, 0.12))
                                 sb.execute_script("arguments[0].blur();", el)
                                 self.log(f"  密码输入框: {sel}")
                                 break
