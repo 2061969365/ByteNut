@@ -788,11 +788,13 @@ class BytenutRenewal:
                         try:
                             sb.wait_for_element_visible(sel, timeout=5)
                             el = sb.find_element(sel)
-                            el.clear()
-                            time.sleep(0.3)
-                            el.send_keys(user)
+                            # 聚焦再输入，逐个字符触发 Vue
+                            sb.execute_script("arguments[0].focus(); arguments[0].select();", el)
+                            for ch in user:
+                                el.send_keys(ch)
+                                time.sleep(0.05)
                             username_found = True
-                            self.log(f"  用户名输入框: {sel}  (send_keys)")
+                            self.log(f"  用户名输入框: {sel}  (slow type)")
                             break
                         except Exception:
                             continue
@@ -811,10 +813,13 @@ class BytenutRenewal:
                         try:
                             sb.wait_for_element_visible(sel, timeout=3)
                             el = sb.find_element(sel)
-                            el.clear()
-                            time.sleep(0.3)
-                            el.send_keys(pwd)
-                            self.log(f"  密码输入框: {sel}  (send_keys)")
+                            sb.execute_script("arguments[0].focus(); arguments[0].select();", el)
+                            for ch in pwd:
+                                el.send_keys(ch)
+                                time.sleep(0.05)
+                            # 失焦触发 Vue 验证
+                            sb.execute_script("arguments[0].blur();", el)
+                            self.log(f"  密码输入框: {sel}  (slow type)")
                             break
                         except Exception:
                             continue
@@ -846,14 +851,37 @@ class BytenutRenewal:
                             submitted = True
                         except Exception:
                             pass
+                    if not submitted:
+                        # 方式3: JS 直接提交表单
+                        try:
+                            sb.execute_script("""
+                                var form = document.querySelector('.el-form') 
+                                    || document.querySelector('form');
+                                if (form) {
+                                    form.dispatchEvent(new Event('submit', {bubbles: true}));
+                                }
+                            """)
+                            self.log("  提交: JS form submit")
+                            submitted = True
+                        except Exception:
+                            pass
                     time.sleep(10)
                     self.shot(sb, f"post_login_{idx}.png")
                     if "/auth/login" in sb.get_current_url():
-                        self.send_tg("❌", "登录失败", user, "未知",
-                                     "未知", "",
-                                     screenshot=self.shot(
-                                         sb, f"login_fail_{idx}.png"))
-                        continue
+                        # 即使 URL 没变，检查是否有 token
+                        has_token = sb.execute_script("""
+                            var t = localStorage.getItem('yl-token') 
+                                || sessionStorage.getItem('yl-token') || '';
+                            return t.length > 10;
+                        """)
+                        if has_token:
+                            self.log("✅ 有 token，认为登录成功")
+                        else:
+                            self.send_tg("❌", "登录失败", user, "未知",
+                                         "未知", "",
+                                         screenshot=self.shot(
+                                             sb, f"login_fail_{idx}.png"))
+                            continue
                     self.log("✅ 登录成功")
 
                     # 停留 homepage 让 CF cookie 稳定
