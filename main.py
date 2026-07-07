@@ -116,26 +116,34 @@ class BytenutRenewal:
     API_LOGIN = "https://www.bytenut.com/api/auth/login"
 
     def api_login(self, user, pwd):
-        """直接用 API 登录，返回 token，失败返回 None"""
+        """直接調用 API 登錄，返回 token；失敗返回 None"""
         try:
-            resp = requests.post(
+            sess = requests.Session()
+            sess.proxies.update({"http": PROXY, "https": PROXY}) if PROXY else None
+            sess.headers.update({
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+                "Origin": "https://www.bytenut.com",
+                "Referer": "https://www.bytenut.com/auth/login",
+            })
+            sess.get("https://www.bytenut.com/auth/login", timeout=15)
+            resp = sess.post(
                 self.API_LOGIN,
                 json={"username": user, "password": pwd, "rememberMe": True},
-                headers={"Accept": "application/json"},
-                proxies={"http": PROXY, "https": PROXY} if PROXY else None,
                 timeout=30,
             )
             self.log(f"  API 响应状态码: {resp.status_code}")
-            self.log(f"  API 响应头: {dict(resp.headers)}")
-            body_text = resp.text[:500]
+            body_text = resp.text[:1000]
             self.log(f"  API 响应体: {body_text}")
             data = resp.json()
-            if data.get("code") == 200:
+            code = data.get("code") or data.get("status")
+            if code and code == 200:
                 token = data.get("data", {}).get("token") or data.get("data", {}).get("yl-token")
                 if token:
                     self.log(f"  API 登录成功，token 长度: {len(token)}")
                     return token
-            self.log(f"  API 登录失败: {data.get('message', resp.status_code)}")
+            self.log(f"  API 登录失败: {data.get('message', data.get('error', resp.status_code))}")
         except Exception as e:
             self.log(f"  API 登录异常: {e}")
         return None
