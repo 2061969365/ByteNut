@@ -391,7 +391,18 @@ class BytenutRenewal:
         except Exception:
             pass
     
-    # ========== Turnstile ==========
+    # ========== Captcha 通用处理 ==========
+    def is_hcaptcha_present(self, sb):
+        try:
+            return sb.execute_script("""
+                return !!(document.querySelector('.h-captcha')
+                    || document.querySelector('.hcaptcha')
+                    || document.querySelector('iframe[src*="hcaptcha"]')
+                    || document.querySelector('div[data-sitekey*="hcaptcha"]'));
+            """)
+        except Exception:
+            return False
+
     def is_turnstile_present(self, sb):
         try:
             return sb.execute_script("""
@@ -404,50 +415,128 @@ class BytenutRenewal:
         except Exception:
             return False
 
-    def wait_turnstile(self, sb, timeout=90):
-        if not self.is_turnstile_present(sb):
-            self.log("ℹ️ 无 Turnstile 验证")
+    def is_captcha_present(self, sb):
+        """检测任意类型验证码"""
+        try:
+            return self.is_hcaptcha_present(sb) or self.is_turnstile_present(sb)
+        except Exception:
+            return False
+
+    def _try_click_hcaptcha(self, sb):
+        """尝试点击 hCaptcha checkbox"""
+        try:
+            # 找到 hCaptcha iframe，计算其位置，用 JS 点击内部 checkbox
+            info = sb.execute_script("""
+                var h = document.querySelector('.h-captcha, .hcaptcha, iframe[src*="hcaptcha"]');
+                if (!h) return null;
+                var r = h.getBoundingClientRect();
+                if (r.width === 0 || r.height === 0) return null;
+                return {
+                    x: r.left + 28,
+                    y: r.top + r.height / 2,
+                    src: h.src || h.getAttribute('src') || ''
+                };
+            """)
+            if not info:
+                return False
+            self.log(f"hCaptcha iframe @ {info['x']},{info['y']}")
+
+            # 用 uc_gui_click_captcha 让 seleniumbase 处理
+            sb.uc_gui_click_captcha()
             return True
-        self.log("⏳ 等待 Turnstile 验证...")
+        except Exception as e:
+            self.log(f"hCaptcha click 异常: {e}")
+            return False
+
+    def resolve_captcha(self, sb, timeout=90):
+        """通用验证码处理，支持 hCaptcha 和 Turnstile"""
+        hc = self.is_hcaptcha_present(sb)
+        tc = self.is_turnstile_present(sb)
+
+        if not hc and not tc:
+            self.log("[OK] 无验证码，跳过")
+            return True
+
+        captcha_type = "hCaptcha" if hc else "Turnstile"
+        self.log(f"⏳ 检测到 {captcha_type}，开始处理...")
         start = time.time()
         last_click = 0
         while time.time() - start < timeout:
             self.remove_overlay_ads(sb)
+
+            # 滚动到验证码区域
             try:
                 sb.execute_script("""
-                    var e = document.querySelector('.cf-turnstile');
+                    var e = document.querySelector('.h-captcha, .hcaptcha, .cf-turnstile');
                     if (e) e.scrollIntoView({block:'center'});
                 """)
             except Exception:
                 pass
-            try:
-                val = sb.execute_script(
-                    "return document.querySelector("
-                    "\"input[name='cf-turnstile-response']\")?.value || '';"
-                )
-                if len(val) > 20:
-                    self.log("✅ Turnstile 完成")
-                    return True
-            except Exception:
-                pass
+
+            # 检查 hCaptcha token
+            if self.is_hcaptcha_present(sb):
+                try:
+                    val = sb.execute_script("""
+                        var i = document.querySelector(
+                            'textarea[name="h-captcha-response"],'
+                          + 'input[name="h-captcha-response"]');
+                        return i ? i.value : '';
+                    """)
+                    if len(val) > 20:
+                        self.log("[OK] ✅ hCaptcha 完成")
+                        return True
+                except Exception:
+                    pass
+
+            # 检查 Turnstile token
+            if self.is_turnstile_present(sb):
+                try:
+                    val = sb.execute_script(
+                        "return document.querySelector("
+                        "\"input[name='cf-turnstile-response']\")?.value || '';"
+                    )
+                    if len(val) > 20:
+                        self.log("[OK] ✅ Turnstile 完成")
+                        return True
+                except Exception:
+                    pass
+
+            # 点击验证码
             now = time.time()
             if now - last_click > 3:
                 try:
                     sb.uc_gui_click_captcha()
                     last_click = now
                 except Exception:
-                    try:
-                        sb.find_element(".cf-turnstile").click()
-                        last_click = now
-                    except Exception:
-                        pass
+                    pass
+                # 如果 uc_gui_click_captcha 失败，用 JS 直接 click
+                if self.is_hcaptcha_present(sb):
+                    self._try_click_hcaptcha(sb)
+
             time.sleep(1)
-        print("::error::Turnstile 验证超时", flush=True)
-        self.log("[FAIL] ⚠️ Turnstile 超时")
+
+        # 超时：再检查一次
+        if self.is_hcaptcha_present(sb):
+            try:
+                val = sb.execute_script(
+                    "return (document.querySelector('textarea[name=\"h-captcha-response\"]')"
+                    "|| document.querySelector('input[name=\"h-captcha-response\"]'))?.value||'';"
+                )
+                if len(val) > 20:
+                    self.log("[OK] ✅ hCaptcha 超时后完成")
+                    return True
+            except Exception:
+                pass
+        print(f"::error::{captcha_type} 验证超时", flush=True)
+        self.log(f"[FAIL] ⚠️ {captcha_type} 超时")
         return False
 
+    def wait_turnstile(self, sb, timeout=90):
+        """保留旧接口，内部委托 resolve_captcha"""
+        return self.resolve_captcha(sb, timeout)
+
     def _wait_dialog_turnstile(self, sb, timeout=30):
-        self.log("⏳ 等待弹窗 Turnstile（最多 30s）...")
+        self.log("⏳ 等待弹窗验证码（最多 30s）...")
         start = time.time()
         last_click = 0
         while time.time() - start < timeout:
@@ -462,8 +551,9 @@ class BytenutRenewal:
                 return btn && !btn.disabled
                     && !btn.classList.contains('is-disabled');
             """):
-                self.log("✅ Continue 已启用，Turnstile 自动完成")
+                self.log("✅ Continue 已启用，验证自动完成")
                 return True
+            # 检查弹窗内的 Turnstile token
             try:
                 val = sb.execute_script("""
                     var d = document.querySelector('div.el-dialog');
@@ -477,6 +567,21 @@ class BytenutRenewal:
                     return True
             except Exception:
                 pass
+            # 检查弹窗内的 hCaptcha token
+            try:
+                val = sb.execute_script("""
+                    var d = document.querySelector('div.el-dialog');
+                    if (!d) return '';
+                    var i = d.querySelector(
+                        'textarea[name="h-captcha-response"],'
+                      + 'input[name="h-captcha-response"]');
+                    return i ? i.value : '';
+                """)
+                if val and len(val) > 20:
+                    self.log("✅ 弹窗 hCaptcha token 已填充")
+                    return True
+            except Exception:
+                pass
             now = time.time()
             if now - last_click > 3:
                 try:
@@ -487,7 +592,7 @@ class BytenutRenewal:
                         sb.execute_script("""
                             var d = document.querySelector('div.el-dialog');
                             if (d) {
-                                var ts = d.querySelector('.cf-turnstile');
+                                var ts = d.querySelector('.cf-turnstile, .h-captcha, .hcaptcha');
                                 if (ts) ts.click();
                             }
                         """)
@@ -509,7 +614,7 @@ class BytenutRenewal:
         """):
             self.log("✅ 超时后 Continue 已启用")
             return True
-        self.log("⚠️ Turnstile 等待结束，尝试继续")
+        self.log("⚠️ 验证等待结束，尝试继续")
         return True
 
     # ========== 广告验证弹窗 ==========
@@ -580,7 +685,7 @@ class BytenutRenewal:
 
     # ========== 续期 ==========
     def try_extend_and_verify(self, sb, server_id, old_expiry):
-        if not self.wait_turnstile(sb):
+        if not self.resolve_captcha(sb):
             return False, ""
         self.remove_overlay_ads(sb)
         self.log("⏳ 点击续期按钮...")
