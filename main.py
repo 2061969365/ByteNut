@@ -1,5 +1,6 @@
 import time
 import os
+import sys
 import requests
 import platform
 from datetime import datetime
@@ -441,7 +442,8 @@ class BytenutRenewal:
                     except Exception:
                         pass
             time.sleep(1)
-        self.log("⚠️ Turnstile 超时")
+        print("::error::Turnstile 验证超时", flush=True)
+        self.log("[FAIL] ⚠️ Turnstile 超时")
         return False
 
     def _wait_dialog_turnstile(self, sb, timeout=30):
@@ -796,10 +798,11 @@ class BytenutRenewal:
     # ========== 主流程 ==========
     def run(self):
         self.log("🚀 开始执行 ByteNut 续期与开机")
+        has_error = False
         accounts = parse_accounts(ACCOUNTS)
         if not accounts:
-            self.log("❌ 无账号")
-            return
+            self.log("[FAIL] ❌ 无账号")
+            sys.exit(1)
 
         for idx, (user, pwd) in enumerate(accounts, 1):
             masked_user = self.mask_account(user)
@@ -828,10 +831,11 @@ class BytenutRenewal:
                                 || sessionStorage.getItem('yl-token') || '';
                         """)
                         if len(current_token) > 10:
-                            self.log("✅ API 登录成功")
+                            self.log("[OK] ✅ API 登录成功")
                             logged_in = True
                         else:
-                            self.log("⚠️ Token 设置未生效")
+                            self.log("[FAIL] ⚠️ Token 设置未生效")
+                            has_error = True
                     if not logged_in:
                         # --- 浏览器登录 ---
                         self.log("--- 浏览器登录 ---")
@@ -862,8 +866,9 @@ class BytenutRenewal:
                             except Exception:
                                 continue
                         if not username_found:
-                            self.log("❌ 找不到用户名输入框")
+                            self.log("[FAIL] ❌ 找不到用户名输入框")
                             self.shot(sb, f"login_no_username_{idx}.png")
+                            has_error = True
                             continue
                         # 找密码输入框
                         password_selectors = [
@@ -927,16 +932,19 @@ class BytenutRenewal:
                                 return t.length > 10;
                             """)
                             if has_token:
-                                self.log("✅ 有 token，认为登录成功")
+                                self.log("[OK] ✅ 有 token，认为登录成功")
                                 logged_in = True
                             else:
+                                self.log("[FAIL] ❌ 浏览器登录失败")
+                                print("::error::" + masked_user + " 登录失败", flush=True)
                                 self.send_tg("❌", "登录失败", user, "未知",
                                              "未知", "",
                                              screenshot=self.shot(sb, f"login_fail_{idx}.png"))
+                                has_error = True
                                 continue
                         else:
                             logged_in = True
-                        self.log("✅ 登录成功")
+                        self.log("[OK] ✅ 登录成功")
                         # 停留 homepage
                         sb.uc_open_with_reconnect(URL_HOMEPAGE, reconnect_time=6)
                         time.sleep(8)
@@ -944,10 +952,13 @@ class BytenutRenewal:
                     # --- 获取服务器信息 ---
                     servers = self.get_servers_data(sb)
                     if not servers:
+                        self.log("[FAIL] ⚠️ API 请求失败，无服务器数据")
+                        print("::error::" + masked_user + " API 请求失败", flush=True)
                         self.send_tg("⚠️", "警告", user, "未知",
                                      "未知", "API 请求失败",
                                      screenshot=self.shot(
                                          sb, f"no_server_{idx}.png"))
+                        has_error = True
                         continue
 
                     server = servers[0]
@@ -960,19 +971,25 @@ class BytenutRenewal:
                     self.log(f"服务器 {log_sid}: 状态={state}, 到期={expiry_str}")
 
                     if not server_id:
+                        self.log("[FAIL] ❌ 服务器ID无效")
+                        print("::error::" + masked_user + " 服务器ID无效", flush=True)
                         self.send_tg("❌", "失败", user, "未知",
                                      state, expiry_str, "服务器ID无效",
                                      screenshot=self.shot(
                                          sb, f"invalid_id_{idx}.png"))
+                        has_error = True
                         continue
 
                     ext_info = self.get_extension_data(sb, server_id)
                     if not ext_info:
+                        self.log("[FAIL] ❌ 无法获取扩展信息")
+                        print("::error::" + masked_user + " 无法获取扩展信息", flush=True)
                         self.send_tg("❌", "失败", user, server_id,
                                      state, expiry_str,
                                      extra="无法获取扩展信息",
                                      screenshot=self.shot(
                                          sb, f"ext_info_fail_{idx}.png"))
+                        has_error = True
                         continue
 
                     can_extend = ext_info.get("canExtend", False)
@@ -988,31 +1005,41 @@ class BytenutRenewal:
                             self.log("🔴 离线可续期，先续期再开机...")
                             ready = self.navigate_to_panel(sb, server_id)
                             if not ready:
+                                self.log("[FAIL] ❌ 面板加载失败")
+                                print("::error::" + masked_user + " 面板加载失败", flush=True)
                                 self.send_tg("❌", "面板加载失败", user,
                                              server_id, "offline", expiry_str,
                                              screenshot=self.shot(
                                                  sb, f"panel_fail_{idx}.png"))
+                                has_error = True
                                 continue
                             if not self.click_renew_menu(sb, server_id, idx):
+                                self.log("[FAIL] ❌ 续期菜单失败")
+                                print("::error::" + masked_user + " 续期菜单失败", flush=True)
                                 self.send_tg("❌", "续期菜单失败", user,
                                              server_id, "offline", expiry_str,
                                              screenshot=self.shot(
                                                  sb, f"renew_fail_{idx}.png"))
+                                has_error = True
                                 continue
                             result, new_time = self.try_extend_and_verify(
                                 sb, server_id, expired_time)
                             if result is True:
                                 if not self.wait_until_not_expired(
                                         sb, server_id):
+                                    self.log("[FAIL] ⚠️ 续期成功但状态未更新")
+                                    print("::error::" + masked_user + " 续期成功但状态未更新", flush=True)
                                     self.send_tg(
                                         "⚠️", "续期成功但状态未更新",
                                         user, server_id, "offline", expiry_str,
                                         "无法开机，请稍后重试",
                                         screenshot=self.shot(
                                             sb, f"start_fail_{idx}.png"))
+                                    has_error = True
                                     continue
                                 ok, final = self.ui_start_server(
                                     sb, server_id, idx)
+                                self.log(f"[OK] ✅ 续期并开机 {'成功' if ok else '未确认'}: {final}")
                                 self.send_tg(
                                     "✅" if ok else "⚠️",
                                     "续期并开机成功" if ok else "续期成功，开机未确认",
@@ -1020,18 +1047,25 @@ class BytenutRenewal:
                                     f"offline -> {final}",
                                     f"{expiry_str} -> {new_time}",
                                     screenshot=self.shot(sb, f"ok_{idx}.png"))
+                                if not ok:
+                                    has_error = True
                             elif result == "cooldown":
+                                self.log("[OK] ⏳ 续期后冷却")
                                 self.send_tg("⏳", "续期后冷却", user,
                                              server_id, "offline", expiry_str,
                                              screenshot=self.shot(
                                                  sb, f"cooldown_{idx}.png"))
                             else:
+                                self.log("[FAIL] ❌ 续期失败")
+                                print("::error::" + masked_user + " 续期失败", flush=True)
                                 self.send_tg("❌", "续期失败", user,
                                              server_id, "offline", expiry_str,
                                              screenshot=self.shot(
                                                  sb, f"extend_fail_{idx}.png"))
+                                has_error = True
                         else:
                             if expired:
+                                self.log("[FAIL] 🚫 已过期且冷却中，无法操作")
                                 self.send_tg(
                                     "🚫", "无法操作", user, server_id,
                                     state, expiry_str,
@@ -1042,6 +1076,7 @@ class BytenutRenewal:
                                 self.log("🔴 离线冷却中，直接开机（UI）")
                                 ok, final = self.ui_start_server(
                                     sb, server_id, idx)
+                                self.log(f"[OK] 开机{'成功' if ok else '失败'}: {final}")
                                 self.send_tg(
                                     "✅" if ok else "❌",
                                     "开机成功" if ok else "开机失败",
@@ -1051,51 +1086,66 @@ class BytenutRenewal:
                                         sb,
                                         f"{'started' if ok else 'start_fail'}"
                                         f"_{idx}.png"))
+                                if not ok:
+                                    has_error = True
                         continue
 
                     # ===== 运行中处理 =====
                     if not can_extend:
                         extra = "服务器已过期但处于冷却期" if expired else ""
-                        self.log(f"⏳ 冷却中 ({cooldown_min}分钟)")
+                        self.log(f"[OK] ⏳ 冷却中 ({cooldown_min}分钟)")
                         self.send_tg("⏳", "冷却中", user, server_id,
                                      state, expiry_str, extra,
                                      screenshot=self.shot(
                                          sb, f"cooldown_{idx}.png"))
                         continue
 
-                    self.log("✅ 可续期，执行续期")
+                    self.log("[OK] ✅ 可续期，执行续期")
                     ready = self.navigate_to_panel(sb, server_id)
                     if not ready:
+                        self.log("[FAIL] ❌ 面板加载失败")
+                        print("::error::" + masked_user + " 面板加载失败", flush=True)
                         self.send_tg("❌", "面板加载失败", user, server_id,
                                      state, expiry_str,
                                      screenshot=self.shot(
                                          sb, f"panel_fail_{idx}.png"))
+                        has_error = True
                         continue
                     if not self.click_renew_menu(sb, server_id, idx):
+                        self.log("[FAIL] ❌ 续期菜单失败")
+                        print("::error::" + masked_user + " 续期菜单失败", flush=True)
                         self.send_tg("❌", "续期菜单失败", user, server_id,
                                      state, expiry_str,
                                      screenshot=self.shot(
                                          sb, f"renew_fail_{idx}.png"))
+                        has_error = True
                         continue
                     result, new_time = self.try_extend_and_verify(
                         sb, server_id, expired_time)
                     if result is True:
+                        self.log("[OK] ✅ 续期成功")
                         self.send_tg("✅", "续期成功", user, server_id,
                                      state, f"{expiry_str} -> {new_time}",
                                      screenshot=self.shot(sb, f"ok_{idx}.png"))
                     elif result == "cooldown":
+                        self.log("[OK] ⏳ 续期后冷却")
                         self.send_tg("⏳", "续期后冷却", user, server_id,
                                      state, expiry_str,
                                      screenshot=self.shot(
                                          sb, f"cooldown_{idx}.png"))
                     else:
+                        self.log("[FAIL] ❌ 续期失败")
+                        print("::error::" + masked_user + " 续期失败", flush=True)
                         self.send_tg("❌", "续期失败", user, server_id,
                                      state, expiry_str,
                                      screenshot=self.shot(
                                          sb, f"extend_fail_{idx}.png"))
+                        has_error = True
 
                 except Exception as e:
-                    self.log(f"❌ 异常: {e}")
+                    self.log(f"[FAIL] ❌ 异常: {e}")
+                    print("::error::" + masked_user + " 异常: " + str(e), flush=True)
+                    has_error = True
                     try:
                         self.send_tg("❌", "异常", user, "未知",
                                      "未知", str(e),
@@ -1105,7 +1155,11 @@ class BytenutRenewal:
                         self.send_tg("❌", "异常", user, "未知",
                                      "未知", str(e))
 
-        self.log("✅ 所有账号处理完毕")
+        if has_error:
+            self.log("[FAIL] ❌ 存在失败，退出码 1")
+            sys.exit(1)
+        else:
+            self.log("[OK] ✅ 所有账号处理完毕")
 
 
 if __name__ == "__main__":
