@@ -812,8 +812,33 @@ class BytenutRenewal:
                             break
                         except Exception:
                             continue
-                    sb.click('//button[contains(., "Sign In")]')
-                    time.sleep(5)
+                    # 点击 Sign In 按钮
+                    time.sleep(1)
+                    sign_in_selectors = [
+                        '//button[contains(., "Sign In")]',
+                        '//button[contains(text(), "Sign In")]',
+                        '.el-button--primary',
+                        'button[type="submit"]',
+                    ]
+                    clicked = False
+                    for sel in sign_in_selectors:
+                        try:
+                            sb.wait_for_element_visible(sel, timeout=3)
+                            sb.execute_script("""
+                                var btn = arguments[0];
+                                btn.scrollIntoView({block:'center'});
+                                btn.click();
+                            """, sb.find_element(sel))
+                            clicked = True
+                            self.log(f"  Sign In 按钮: {sel}")
+                            break
+                        except Exception:
+                            continue
+                    if not clicked:
+                        self.log("❌ 找不到 Sign In 按钮")
+                        self.shot(sb, f"login_no_button_{idx}.png")
+                        continue
+                    time.sleep(8)
                     if "/auth/login" in sb.get_current_url():
                         self.send_tg("❌", "登录失败", user, "未知",
                                      "未知", "",
