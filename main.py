@@ -787,7 +787,15 @@ class BytenutRenewal:
                     for sel in username_selectors:
                         try:
                             sb.wait_for_element_visible(sel, timeout=5)
-                            sb.type(sel, user)
+                            # 用 JS 设置值并触发 Vue 响应式
+                            sb.execute_script(f"""
+                                var el = document.querySelector('{sel}');
+                                var nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+                                    window.HTMLInputElement.prototype, 'value').set;
+                                nativeInputValueSetter.call(el, '{user}');
+                                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                                el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            """)
                             username_found = True
                             self.log(f"  用户名输入框: {sel}")
                             break
@@ -807,7 +815,16 @@ class BytenutRenewal:
                     for sel in password_selectors:
                         try:
                             sb.wait_for_element_visible(sel, timeout=3)
-                            sb.type(sel, pwd)
+                            # 转义密码中的特殊字符
+                            pwd_escaped = pwd.replace("\\", "\\\\").replace("'", "\\'")
+                            sb.execute_script(f"""
+                                var el = document.querySelector('{sel}');
+                                var nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+                                    window.HTMLInputElement.prototype, 'value').set;
+                                nativeInputValueSetter.call(el, '{pwd_escaped}');
+                                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                                el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            """)
                             self.log(f"  密码输入框: {sel}")
                             break
                         except Exception:
