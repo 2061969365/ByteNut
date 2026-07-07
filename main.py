@@ -279,6 +279,37 @@ class BytenutRenewal:
             time.sleep(interval)
         return False
 
+    # ========== Cookie 弹窗处理 ==========
+    def dismiss_cookie_consent(self, sb):
+        try:
+            sb.execute_script("""
+                (function(){
+                    // Google Funding Choices / Ezoic cookie consent
+                    var selectors = [
+                        'button.fc-button-label',
+                        'button.fc-cta-consent',
+                        '.fc-dialog button',
+                        '[aria-label="Continue with Recommended Cookies"]',
+                        '.fc-primary-button',
+                        'button[title="Continue with Recommended Cookies"]'
+                    ];
+                    for (var i = 0; i < selectors.length; i++) {
+                        var btn = document.querySelector(selectors[i]);
+                        if (btn) { btn.click(); return; }
+                    }
+                    // 尝试直接找包含 "Continue with Recommended" 文字的按钮
+                    document.querySelectorAll('button').forEach(function(el){
+                        if (el.textContent.indexOf('Continue with Recommended') !== -1)
+                            el.click();
+                    });
+                    // 隐藏整个 dialog
+                    var dialog = document.querySelector('.fc-dialog-wrapper, .fc-consent-root, .fc-dialog-overlay');
+                    if (dialog) dialog.style.display = 'none';
+                })();
+            """)
+        except Exception:
+            pass
+
     # ========== 广告清理 ==========
     def remove_overlay_ads(self, sb):
         try:
@@ -741,10 +772,46 @@ class BytenutRenewal:
                 try:
                     # --- 登录 ---
                     sb.uc_open_with_reconnect(URL_LOGIN_PANEL, reconnect_time=5)
-                    sb.wait_for_element_visible(
-                        'input[placeholder="Username"]', timeout=25)
-                    sb.type('input[placeholder="Username"]', user)
-                    sb.type('input[placeholder="Password"]', pwd)
+                    time.sleep(3)
+                    self.dismiss_cookie_consent(sb)
+                    time.sleep(1)
+                    # 用多种方式尝试找到用户名输入框
+                    username_selectors = [
+                        'input[placeholder="Username"]',
+                        'input[placeholder*="username" i]',
+                        'input[placeholder*="Username"]',
+                        '.el-input__inner[type="text"]',
+                        'input[type="text"]',
+                    ]
+                    username_found = False
+                    for sel in username_selectors:
+                        try:
+                            sb.wait_for_element_visible(sel, timeout=5)
+                            sb.type(sel, user)
+                            username_found = True
+                            self.log(f"  用户名输入框: {sel}")
+                            break
+                        except Exception:
+                            continue
+                    if not username_found:
+                        self.log("❌ 找不到用户名输入框")
+                        self.shot(sb, f"login_no_username_{idx}.png")
+                        continue
+                    # 用多种方式尝试找到密码输入框
+                    password_selectors = [
+                        'input[placeholder="Password"]',
+                        'input[placeholder*="password" i]',
+                        'input[placeholder*="Password"]',
+                        'input[type="password"]',
+                    ]
+                    for sel in password_selectors:
+                        try:
+                            sb.wait_for_element_visible(sel, timeout=3)
+                            sb.type(sel, pwd)
+                            self.log(f"  密码输入框: {sel}")
+                            break
+                        except Exception:
+                            continue
                     sb.click('//button[contains(., "Sign In")]')
                     time.sleep(5)
                     if "/auth/login" in sb.get_current_url():
