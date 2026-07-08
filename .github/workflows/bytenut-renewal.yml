@@ -300,6 +300,113 @@ jobs:
               
               config["outbounds"].append(outbound)
 
+          elif protocol == "hysteria2":
+              # hysteria2://password@host:port?sni=xxx&insecure=1#name
+              auth, rest = content.split("@", 1)
+              if "?" in rest:
+                  host_port, params_str = rest.split("?", 1)
+              else:
+                  host_port, params_str = rest, ""
+
+              if ":" in host_port:
+                  address, port = host_port.rsplit(":", 1)
+              else:
+                  address, port = host_port, "443"
+
+              params = parse_qs(params_str)
+              sni = params.get("sni", [address])[0]
+              insecure = params.get("insecure", ["0"])[0] == "1"
+
+              print(f"[INFO] Hysteria2 -> {mask(address)}:{port} (sni: {sni})")
+
+              # 生成 sing-box JSON 配置
+              singbox_config = {
+                  "log": {"level": "warning"},
+                  "inbounds": [{
+                      "type": "mixed",
+                      "listen": "127.0.0.1",
+                      "listen_port": 1080
+                  }],
+                  "outbounds": [{
+                      "type": "hysteria2",
+                      "server": address,
+                      "server_port": int(port),
+                      "up_mbps": 100,
+                      "down_mbps": 100,
+                      "password": auth,
+                      "tls": {
+                          "enabled": True,
+                          "server_name": sni,
+                          "insecure": insecure
+                      }
+                  }]
+              }
+              with open("singbox_config.json", "w") as f:
+                  json.dump(singbox_config, f, indent=2)
+
+              with open("use_singbox.txt", "w") as f:
+                  f.write("hysteria2")
+
+              print("[INFO] ✅ Hysteria2 (sing-box) 配置已生成")
+              sys.exit(0)
+
+          elif protocol == "tuic":
+              # tuic://uuid:password@host:port?congestion_control=bbr&sni=xxx&allow_insecure=1#name
+              uuid_pass, rest = content.split("@", 1)
+              if ":" in uuid_pass:
+                  uuid, password = uuid_pass.split(":", 1)
+              else:
+                  uuid, password = uuid_pass, ""
+
+              if "?" in rest:
+                  host_port, params_str = rest.split("?", 1)
+              else:
+                  host_port, params_str = rest, ""
+
+              if ":" in host_port:
+                  address, port = host_port.rsplit(":", 1)
+              else:
+                  address, port = host_port, "443"
+
+              params = parse_qs(params_str)
+              sni = params.get("sni", [address])[0]
+              insecure = params.get("allow_insecure", ["0"])[0] == "1"
+              cc = params.get("congestion_control", ["bbr"])[0]
+
+              print(f"[INFO] TUIC -> {mask(address)}:{port} (sni: {sni}, cc: {cc})")
+
+              # 生成 sing-box JSON 配置
+              singbox_config = {
+                  "log": {"level": "warning"},
+                  "inbounds": [{
+                      "type": "mixed",
+                      "listen": "127.0.0.1",
+                      "listen_port": 1080
+                  }],
+                  "outbounds": [{
+                      "type": "tuic",
+                      "server": address,
+                      "server_port": int(port),
+                      "uuid": uuid,
+                      "password": password,
+                      "congestion_control": cc,
+                      "udp_relay_mode": "native",
+                      "tls": {
+                          "enabled": True,
+                          "server_name": sni,
+                          "insecure": insecure
+                      }
+                  }]
+              }
+              with open("singbox_config.json", "w") as f:
+                  json.dump(singbox_config, f, indent=2)
+
+              with open("use_singbox.txt", "w") as f:
+                  f.write("tuic")
+
+              print("[INFO] ✅ TUIC (sing-box) 配置已生成")
+              sys.exit(0)
+
           with open("xray_config.json", "w") as f:
               json.dump(config, f, indent=2)
           
@@ -312,6 +419,34 @@ jobs:
             echo "proxy_server=$EXTERNAL_SOCKS" >> $GITHUB_OUTPUT
             echo "use_proxy=true" >> $GITHUB_OUTPUT
             echo "[INFO] ✅ 使用外部 SOCKS5 代理"
+            exit 0
+          fi
+
+          # Hysteria 2 / TUIC（sing-box 统一处理）
+          if [ -f "use_singbox.txt" ]; then
+            PROTO_NAME=$(cat use_singbox.txt)
+            echo "[INFO] 下载 sing-box（$PROTO_NAME 协议）..."
+            wget -q https://github.com/SagerNet/sing-box/releases/latest/download/sing-box-linux-amd64.tar.gz -O singbox.tar.gz
+            tar -xzf singbox.tar.gz
+            SINGBOX=$(find . -name "sing-box" -type f -path "*/sing-box*" | head -1)
+            chmod +x "$SINGBOX"
+            ./$SINGBOX run -c singbox_config.json > singbox.log 2>&1 &
+            sleep 8
+
+            echo "[INFO] 测试 $PROTO_NAME 代理连接..."
+            for i in 1 2 3 4 5; do
+              if curl -x socks5://127.0.0.1:1080 -s --max-time 15 https://api.ipify.org > /dev/null 2>&1; then
+                echo "proxy_server=socks5://127.0.0.1:1080" >> $GITHUB_OUTPUT
+                echo "use_proxy=true" >> $GITHUB_OUTPUT
+                echo "[INFO] ✅ $PROTO_NAME 代理连接成功"
+                exit 0
+              fi
+              echo "[WARN] $PROTO_NAME 尝试 $i/5..."
+              sleep 3
+            done
+            echo "[ERROR] ❌ $PROTO_NAME 代理连接失败，回退直连"
+            echo "use_proxy=false" >> $GITHUB_OUTPUT
+            echo "proxy_server=" >> $GITHUB_OUTPUT
             exit 0
           fi
 
