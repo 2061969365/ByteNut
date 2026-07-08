@@ -481,11 +481,17 @@ class BytenutRenewal:
                     }
                     // 尝试直接找包含 "Continue with Recommended" 文字的按钮
                     document.querySelectorAll('button').forEach(function(el){
-                        if (el.textContent.indexOf('Continue with Recommended') !== -1)
+                        var txt = el.textContent.trim();
+                        if (txt.indexOf('Continue with Recommended') !== -1
+                            || txt === 'Dismiss'
+                            || txt === 'Opt out')
                             el.click();
                     });
+                    // Ezoic 弹窗: 直接点关闭或隐藏
+                    var closeBtn = document.querySelector('#ez-cookie-dismiss, [data-ezcb="1"], .ez-cookie-close');
+                    if (closeBtn) closeBtn.click();
                     // 隐藏整个 dialog
-                    var dialog = document.querySelector('.fc-dialog-wrapper, .fc-consent-root, .fc-dialog-overlay');
+                    var dialog = document.querySelector('.fc-dialog-wrapper, .fc-consent-root, .fc-dialog-overlay, .ez-cookie-dialog');
                     if (dialog) dialog.style.display = 'none';
                 })();
             """)
