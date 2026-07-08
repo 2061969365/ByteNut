@@ -595,7 +595,11 @@ class BytenutRenewal:
                 return False
             url = sb.execute_script("return window.location.href;")
             self.log(f"  NopeCHA: sitekey={sitekey[:12]}...")
-            resp = requests.post("https://api.nopecha.com/token", json={
+            # 通过 VPS 代理请求，避免 GitHub Actions 共享 IP 的限速
+            sess2 = requests.Session()
+            if PROXY:
+                sess2.proxies.update({"http": PROXY, "https": PROXY})
+            resp = sess2.post("https://api.nopecha.com/token", json={
                 "type": "hcaptcha",
                 "sitekey": sitekey,
                 "url": url,
