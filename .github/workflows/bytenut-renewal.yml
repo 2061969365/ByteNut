@@ -375,7 +375,13 @@ jobs:
 
           # 下载并启动 sing-box
           echo "[INFO] 下载 sing-box..."
-          wget -q https://github.com/SagerNet/sing-box/releases/latest/download/sing-box-linux-amd64.tar.gz -O singbox.tar.gz
+          LATEST=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep tag_name | cut -d '"' -f 4 | sed 's/v//')
+          if [ -z "$LATEST" ]; then
+            echo "[WARN] 无法获取版本，使用 v1.13.14"
+            LATEST="1.13.14"
+          fi
+          echo "[INFO] sing-box 版本: $LATEST"
+          wget -q "https://github.com/SagerNet/sing-box/releases/download/v${LATEST}/sing-box-${LATEST}-linux-amd64.tar.gz" -O singbox.tar.gz
           tar -xzf singbox.tar.gz
           SINGBOX=$(find . -name "sing-box" -type f -path "*/sing-box*" | head -1)
           chmod +x "$SINGBOX"
