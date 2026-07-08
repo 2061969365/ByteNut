@@ -615,15 +615,15 @@ class BytenutRenewal:
             return False
 
     def _setup_nopecha_extension(self):
-        """下载并配置 NopeCHA automation build 扩展"""
+        """下载并配置 NopeCHA graphical build 扩展（无需 API key）"""
         ext_dir = "nopecha_ext"
         if os.path.isdir(ext_dir) and os.path.isfile(os.path.join(ext_dir, "manifest.json")):
             self.log(f"  NopeCHA 扩展已存在: {ext_dir}")
             return ext_dir
         try:
             url = ("https://github.com/NopeCHALLC/nopecha-extension/"
-                   "releases/latest/download/chromium_automation.zip")
-            self.log("  NopeCHA: 下载 automation build...")
+                   "releases/latest/download/chromium.zip")
+            self.log("  NopeCHA: 下载 graphical build...")
             r = requests.get(url, timeout=30)
             zip_path = "nopecha_ext.zip"
             with open(zip_path, "wb") as f:
@@ -632,23 +632,7 @@ class BytenutRenewal:
             with zipfile.ZipFile(zip_path, "r") as z:
                 z.extractall(ext_dir)
             os.remove(zip_path)
-            # 配置 manifest.json: auto-solve 开启
-            manifest_path = os.path.join(ext_dir, "manifest.json")
-            with open(manifest_path, "r") as f:
-                manifest = json.load(f)
-            manifest.setdefault("nopecha", {})
-            manifest["nopecha"].update({
-                "hcaptcha_auto_solve": True,
-                "hcaptcha_auto_open": True,
-                "recaptcha_auto_solve": True,
-                "recaptcha_auto_open": True,
-                "funcaptcha_auto_solve": True,
-                "textcaptcha_auto_solve": True,
-                "awscaptcha_auto_solve": True,
-            })
-            with open(manifest_path, "w") as f:
-                json.dump(manifest, f, indent=4)
-            self.log(f"[OK] NopeCHA 扩展已配置: {ext_dir}")
+            self.log(f"[OK] NopeCHA 扩展已下载: {ext_dir}")
             return ext_dir
         except Exception as e:
             self.log(f"  NopeCHA 扩展下载失败: {e}")
