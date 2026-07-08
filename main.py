@@ -1,6 +1,7 @@
 import time
 import os
 import sys
+import json
 import random
 import requests
 import platform
@@ -559,75 +560,45 @@ class BytenutRenewal:
             self.log(f"hCaptcha click 异常: {e}")
             return False
 
-    def _solve_hcaptcha_api(self, sb):
-        """用 NopeCHA Token API 解 hCaptcha（免费，IP 限速 100/天）"""
+    def _setup_nopecha_extension(self):
+        """下载并配置 NopeCHA automation build 扩展"""
+        ext_dir = "nopecha_ext"
+        if os.path.isdir(ext_dir) and os.path.isfile(os.path.join(ext_dir, "manifest.json")):
+            self.log(f"  NopeCHA 扩展已存在: {ext_dir}")
+            return ext_dir
         try:
-            sitekey = sb.execute_script("""
-                var sk = '';
-                // 1. .h-captcha 的 data-sitekey
-                var el = document.querySelector('.h-captcha');
-                if (el) sk = el.getAttribute('data-sitekey') || '';
-                // 2. 任意元素上找 data-sitekey
-                if (!sk) {
-                    var all = document.querySelectorAll('[data-sitekey]');
-                    if (all.length) sk = all[0].getAttribute('data-sitekey') || '';
-                }
-                // 3. 从 iframe src 解析
-                if (!sk) {
-                    var ifr = document.querySelector('iframe[src*="hcaptcha"]');
-                    if (ifr) {
-                        var m = ifr.src.match(/[?&]sitekey=([^&]+)/);
-                        if (m) sk = decodeURIComponent(m[1]);
-                    }
-                }
-                // 4. 从 script 标签找 hcaptcha api url
-                if (!sk) {
-                    var sc = document.querySelector('script[src*="hcaptcha"]');
-                    if (sc) {
-                        var m = sc.src.match(/[?&]sitekey=([^&]+)/);
-                        if (m) sk = decodeURIComponent(m[1]);
-                    }
-                }
-                return sk;
-            """)
-            if not sitekey or len(sitekey) < 10:
-                self.log("  NopeCHA: 找不到 sitekey")
-                return False
-            url = sb.execute_script("return window.location.href;")
-            self.log(f"  NopeCHA: sitekey={sitekey[:12]}...")
-            # 通过 VPS 代理请求，避免 GitHub Actions 共享 IP 的限速
-            sess2 = requests.Session()
-            if PROXY:
-                sess2.proxies.update({"http": PROXY, "https": PROXY})
-            resp = sess2.post("https://api.nopecha.com/token", json={
-                "type": "hcaptcha",
-                "sitekey": sitekey,
-                "url": url,
-            }, timeout=60)
-            data = resp.json()
-            token = data.get("data", "")
-            if len(token) > 20:
-                # 用 CDP 注入 token，避免 JS 字符串转义问题
-                safe_token = token.replace("\\", "\\\\").replace("'", "\\'")
-                sb.execute_script(f"""
-                    var ta = document.querySelector('textarea[name="h-captcha-response"]'
-                        || 'input[name="h-captcha-response"]');
-                    if (ta) {{
-                        ta.value = '{safe_token}';
-                        ta.dispatchEvent(new Event('input', {{bubbles: true}}));
-                        ta.dispatchEvent(new Event('change', {{bubbles: true}}));
-                    }}
-                    // 触发 hCaptcha 回调
-                    if (window.__hcaptchaCallback) window.__hcaptchaCallback('{safe_token}');
-                    if (window.hcaptchaCallback) window.hcaptchaCallback('{safe_token}');
-                """)
-                time.sleep(1)
-                self.log("[OK] NopeCHA token 已注入")
-                return True
-            self.log(f"  NopeCHA 失败: {resp.status_code} {data.get('message', '')}")
+            url = ("https://github.com/NopeCHALLC/nopecha-extension/"
+                   "releases/latest/download/chromium_automation.zip")
+            self.log("  NopeCHA: 下载 automation build...")
+            r = requests.get(url, timeout=30)
+            zip_path = "nopecha_ext.zip"
+            with open(zip_path, "wb") as f:
+                f.write(r.content)
+            import zipfile
+            with zipfile.ZipFile(zip_path, "r") as z:
+                z.extractall(ext_dir)
+            os.remove(zip_path)
+            # 配置 manifest.json: auto-solve 开启
+            manifest_path = os.path.join(ext_dir, "manifest.json")
+            with open(manifest_path, "r") as f:
+                manifest = json.load(f)
+            manifest.setdefault("nopecha", {})
+            manifest["nopecha"].update({
+                "hcaptcha_auto_solve": True,
+                "hcaptcha_auto_open": True,
+                "recaptcha_auto_solve": True,
+                "recaptcha_auto_open": True,
+                "funcaptcha_auto_solve": True,
+                "textcaptcha_auto_solve": True,
+                "awscaptcha_auto_solve": True,
+            })
+            with open(manifest_path, "w") as f:
+                json.dump(manifest, f, indent=4)
+            self.log(f"[OK] NopeCHA 扩展已配置: {ext_dir}")
+            return ext_dir
         except Exception as e:
-            self.log(f"  NopeCHA 异常: {e}")
-        return False
+            self.log(f"  NopeCHA 扩展下载失败: {e}")
+            return None
 
     def resolve_captcha(self, sb, timeout=90):
         """通用验证码处理，支持 hCaptcha 和 Turnstile"""
@@ -641,14 +612,6 @@ class BytenutRenewal:
         captcha_type = "hCaptcha" if hc else "Turnstile"
         self.log(f"⏳ 检测到 {captcha_type}，开始处理...")
         start = time.time()
-
-        # hCaptcha: 先用 NopeCHA API 解
-        if hc:
-            api_ok = self._solve_hcaptcha_api(sb)
-            if api_ok:
-                self.log("[OK] ✅ hCaptcha 完成")
-                return True
-            self.log("  NopeCHA API 失败，尝试手动点击...")
 
         last_click = 0
         while time.time() - start < timeout:
@@ -1098,6 +1061,15 @@ class BytenutRenewal:
             self.log("[FAIL] ❌ 无账号")
             sys.exit(1)
 
+        # 下载 NopeCHA automation build 扩展
+        ext_path = self._setup_nopecha_extension()
+        if ext_path:
+            ext_abspath = os.path.abspath(ext_path)
+            ext_arg = f"--load-extension={ext_abspath},--disable-extensions-except={ext_abspath}"
+        else:
+            ext_arg = ""
+            self.log("[WARN] NopeCHA 扩展加载失败，仅用 CDP 点击")
+
         for idx, (user, pwd) in enumerate(accounts, 1):
             masked_user = self.mask_account(user)
             self.log(f"==== 账号 [{idx}] {masked_user} ====")
@@ -1110,6 +1082,7 @@ class BytenutRenewal:
                     "--disable-blink-features=AutomationControlled,"
                     "--disable-automation,"
                     "--no-first-run,--no-default-browser-check"
+                    + ("," + ext_arg if ext_arg else "")
                 ),
                 proxy=PROXY,
             ) as sb:
