@@ -560,52 +560,6 @@ class BytenutRenewal:
             self.log(f"hCaptcha click 异常: {e}")
             return False
 
-    def _check_nopecha_loaded(self, sb):
-        """检测 NopeCHA 扩展是否成功加载"""
-        try:
-            result = sb.execute_script("""
-                // 方法1: chrome.management API
-                var loaded = false;
-                var nopechaFound = false;
-                try {
-                    // 检查 window.nopecha 或 window.__nopecha 对象
-                    if (typeof window.nopecha !== 'undefined' || typeof window.__nopecha !== 'undefined') {
-                        nopechaFound = true;
-                    }
-                } catch(e) {}
-                
-                // 方法2: 检查 content script 注入的元素
-                if (!nopechaFound) {
-                    nopechaFound = !!document.querySelector('[data-nopecha]');
-                }
-                
-                // 方法3: 检查扩展是否在 chrome.extensions 中
-                if (!nopechaFound && typeof chrome !== 'undefined' && chrome.runtime) {
-                    try {
-                        // NopeCHA extension ID (automation build)
-                        nopechaFound = !!chrome.runtime.getManifest;
-                    } catch(e) {}
-                }
-                
-                // 方法4: 检查页面上的 NopeCHA 相关脚本
-                if (!nopechaFound) {
-                    var scripts = document.querySelectorAll('script[src*="nopecha"]');
-                    nopechaFound = scripts.length > 0;
-                }
-                
-                return {
-                    nopecha: nopechaFound,
-                    url: window.location.href
-                };
-            """)
-            if result and result.get('nopecha'):
-                self.log("[OK] NopeCHA 扩展已加载")
-            else:
-                self.log("[WARN] NopeCHA 扩展未检测到，可能未加载")
-                self.log(f"  页面: {result.get('url', 'unknown')[:80]}")
-        except Exception as e:
-            self.log(f"  扩展检测异常: {e}")
-
     def _setup_nopecha_extension(self):
         """下载并配置 NopeCHA automation build 扩展"""
         ext_dir = "nopecha_ext"
@@ -647,21 +601,46 @@ class BytenutRenewal:
             return None
 
     def _is_visual_challenge_open(self, sb):
-        """检测 hCaptcha visual challenge 是否已打开"""
+        """检测 hCaptcha visual challenge 是否已打开（检查 iframe 内部）"""
         try:
             return sb.execute_script("""
-                // 检查 challenge-specific 元素
-                return !!(
-                    document.querySelector('.challenge-container')
-                    || document.querySelector('.task-image')
-                    || document.querySelector('.display-language-change')
-                    || document.querySelector('.challenge-image')
-                    || document.querySelector('.image-wrapper')
-                    || document.querySelector('[class*="challenge"]')
-                    || document.querySelector('.h-captcha iframe[title*="challenge"]')
-                );
+                var iframe = document.querySelector('.h-captcha iframe, iframe[src*="hcaptcha"]');
+                if (!iframe) return false;
+                try {
+                    var doc = iframe.contentDocument || iframe.contentWindow.document;
+                    return !!(doc.querySelector('.challenge-container')
+                        || doc.querySelector('.task-image')
+                        || doc.querySelector('.image-grid')
+                        || doc.querySelector('[class*="grid"]')
+                        || doc.querySelector('#center')
+                        || doc.querySelector('td'));
+                } catch(e) {
+                    return iframe.src && iframe.src.indexOf('checkbox') === -1;
+                }
             """)
         except Exception:
+            return False
+
+    def _check_extension_on_page(self, sb):
+        """在 ByteNut 页面上检测 NopeCHA 扩展是否加载"""
+        try:
+            result = sb.execute_script("""
+                var nopechaFound = false;
+                try {
+                    if (typeof window.__nopecha !== 'undefined') nopechaFound = true;
+                    if (typeof window.nopecha !== 'undefined') nopechaFound = true;
+                } catch(e) {}
+                return { nopecha: nopechaFound, url: window.location.href.substring(0, 80) };
+            """)
+            if result and result.get('nopecha'):
+                self.log("[OK] NopeCHA 扩展已检测到（content script 已注入）")
+                return True
+            else:
+                url = result.get('url', 'unknown') if result else 'unknown'
+                self.log(f"[WARN] NopeCHA 扩展未检测到（页面: {url}）")
+                return False
+        except Exception as e:
+            self.log(f"  扩展检测异常: {e}")
             return False
 
     def resolve_captcha(self, sb, timeout=90):
@@ -675,16 +654,20 @@ class BytenutRenewal:
 
         captcha_type = "hCaptcha" if hc else "Turnstile"
         self.log(f"⏳ 检测到 {captcha_type}，开始处理...")
-        start = time.time()
 
+        ext_ok = self._check_extension_on_page(sb)
+        if ext_ok:
+            self.log("  NopeCHA 扩展已就绪，点击 checkbox 后等待自动解题...")
+        else:
+            self.log("  NopeCHA 扩展未就绪，继续尝试手动点击...")
+
+        start = time.time()
         checkbox_clicked = False
         challenge_wait_start = 0
         last_click = 0
 
         while time.time() - start < timeout:
             self.remove_overlay_ads(sb)
-
-            # 滚动到验证码区域
             try:
                 sb.execute_script("""
                     var e = document.querySelector('.h-captcha, .hcaptcha, .cf-turnstile');
@@ -693,7 +676,6 @@ class BytenutRenewal:
             except Exception:
                 pass
 
-            # 检查 hCaptcha token
             if self.is_hcaptcha_present(sb):
                 try:
                     val = sb.execute_script("""
@@ -703,12 +685,11 @@ class BytenutRenewal:
                         return i ? i.value : '';
                     """)
                     if len(val) > 20:
-                        self.log("[OK] ✅ hCaptcha 完成")
+                        self.log("[OK] hCaptcha 完成")
                         return True
                 except Exception:
                     pass
 
-            # 检查 Turnstile token
             if self.is_turnstile_present(sb):
                 try:
                     val = sb.execute_script(
@@ -716,26 +697,28 @@ class BytenutRenewal:
                         "\"input[name='cf-turnstile-response']\")?.value || '';"
                     )
                     if len(val) > 20:
-                        self.log("[OK] ✅ Turnstile 完成")
+                        self.log("[OK] Turnstile 完成")
                         return True
                 except Exception:
                     pass
 
-            # 检测 visual challenge 状态
             challenge_open = self._is_visual_challenge_open(sb)
 
             if challenge_open and checkbox_clicked:
-                # Challenge 已打开且 checkbox 已点击 → 停止点击，只等 token
                 if challenge_wait_start == 0:
                     challenge_wait_start = time.time()
-                    self.log("  ✅ Visual challenge 已打开，等待扩展自动解题...")
+                    self.log("  Visual challenge 已打开，停止点击等待解题...")
                 elapsed = int(time.time() - challenge_wait_start)
                 if elapsed > 0 and elapsed % 10 == 0:
                     self.log(f"  等待中... {elapsed}s")
+                # 每 20 秒重试一次 checkbox
+                if elapsed > 20:
+                    checkbox_clicked = False
+                    challenge_wait_start = 0
+                    self.log("  重试点击 checkbox...")
                 time.sleep(1)
                 continue
 
-            # Checkbox 阶段：点击
             now = time.time()
             if now - last_click > 3:
                 try:
@@ -746,10 +729,14 @@ class BytenutRenewal:
                 if self.is_hcaptcha_present(sb):
                     if self._try_click_hcaptcha(sb):
                         checkbox_clicked = True
+                        self.log("  Checkbox 点击成功，等待 visual challenge...")
+                        for _ in range(5):
+                            if self._is_visual_challenge_open(sb):
+                                break
+                            time.sleep(1)
 
             time.sleep(1)
 
-        # 超时：再检查一次
         if self.is_hcaptcha_present(sb):
             try:
                 val = sb.execute_script(
@@ -757,12 +744,12 @@ class BytenutRenewal:
                     "|| document.querySelector('input[name=\"h-captcha-response\"]'))?.value||'';"
                 )
                 if len(val) > 20:
-                    self.log("[OK] ✅ hCaptcha 超时后完成")
+                    self.log("[OK] hCaptcha 超时后完成")
                     return True
             except Exception:
                 pass
         print(f"::error::{captcha_type} 验证超时", flush=True)
-        self.log(f"[FAIL] ⚠️ {captcha_type} 超时")
+        self.log(f"[FAIL] {captcha_type} 超时")
         return False
 
     def wait_turnstile(self, sb, timeout=90):
@@ -1147,9 +1134,9 @@ class BytenutRenewal:
         ext_path = self._setup_nopecha_extension()
         if ext_path:
             ext_abspath = os.path.abspath(ext_path)
-            ext_arg = f"--load-extension={ext_abspath},--disable-extensions-except={ext_abspath}"
+            self.log(f"  NopeCHA 扩展路径: {ext_abspath}")
         else:
-            ext_arg = ""
+            ext_abspath = None
             self.log("[WARN] NopeCHA 扩展加载失败，仅用 CDP 点击")
 
         for idx, (user, pwd) in enumerate(accounts, 1):
@@ -1164,13 +1151,11 @@ class BytenutRenewal:
                     "--disable-blink-features=AutomationControlled,"
                     "--disable-automation,"
                     "--no-first-run,--no-default-browser-check"
-                    + ("," + ext_arg if ext_arg else "")
                 ),
                 proxy=PROXY,
+                extension_dir=ext_abspath,
             ) as sb:
                 self._inject_stealth(sb)
-                # 检测 NopeCHA 扩展是否加载
-                self._check_nopecha_loaded(sb)
                 try:
                     logged_in = False
                     # --- API 登录 ---
