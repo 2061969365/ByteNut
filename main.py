@@ -529,6 +529,16 @@ class BytenutRenewal:
                     });
                     document.body.style.overflow = 'auto';
                     document.body.style.position = 'static';
+
+                    // 移除全屏透明覆盖层（阻挡点击的元凶）
+                    document.querySelectorAll('div').forEach(function(el) {
+                        var s = window.getComputedStyle(el);
+                        if (s.position === 'fixed'
+                            && parseFloat(s.opacity) < 0.1
+                            && el.innerHTML.trim() === '') {
+                            el.remove();
+                        }
+                    });
                 })();
             """)
         except Exception:
@@ -804,6 +814,38 @@ class BytenutRenewal:
         """保留旧接口，内部委托 resolve_captcha"""
         return self.resolve_captcha(driver, timeout)
 
+    # ========== NopeTCHA 验证码检测与处理 ==========
+    def detect_nopecha_captcha(self, driver):
+        """检测 NopeTCHA 视觉验证码（非 hCaptcha/Turnstile）"""
+        try:
+            return driver.execute_script("""
+                return !!(document.querySelector('[class*="nopecha"]')
+                    || document.querySelector('[id*="nopecha"]')
+                    || document.querySelector('div[style*="position: fixed"][style*="z-index"]')
+                    || document.querySelector('.task-image')
+                    || document.querySelector('.image-grid')
+                    || document.querySelector('[class*="challenge"]'));
+            """)
+        except Exception:
+            return False
+
+    def wait_nopecha_solve(self, driver, timeout=90):
+        """等待 NopeTCHA 验证码被扩展自动解决"""
+        start = time.time()
+        self.log("⏳ 等待 NopeTCHA 验证码解决...")
+        while time.time() - start < timeout:
+            # 检查验证码是否已消失
+            if not self.detect_nopecha_captcha(driver):
+                self.log("[OK] NopeTCHA 验证码已解决")
+                return True
+            # 每 5 秒检查一次
+            time.sleep(5)
+            elapsed = int(time.time() - start)
+            if elapsed % 15 == 0 and elapsed > 0:
+                self.log(f"  NopeTCHA 等待中... {elapsed}s/{timeout}s")
+        self.log("[FAIL] NopeTCHA 验证码超时")
+        return False
+
     def _wait_dialog_turnstile(self, driver, timeout=30):
         self.log("⏳ 等待弹窗验证码（最多 30s）...")
         start = time.time()
@@ -940,9 +982,24 @@ class BytenutRenewal:
                 self.wait_present(driver, RENEW_MENU, timeout=15)
                 self.wait_visible(driver, RENEW_MENU, timeout=10)
                 self.remove_overlay_ads(driver)
-                self.click(driver, RENEW_MENU)
+                # 额外移除可能残留的透明覆盖层
+                driver.execute_script("""
+                    document.querySelectorAll('div').forEach(function(el) {
+                        var s = window.getComputedStyle(el);
+                        if (s.position === 'fixed'
+                            && parseFloat(s.opacity) < 0.1
+                            && el.innerHTML.trim() === '') {
+                            el.remove();
+                        }
+                    });
+                """)
+                el = self.find(driver, RENEW_MENU)
+                driver.execute_script("arguments[0].click();", el)
                 time.sleep(3)
                 self.log(f"✅ RENEW SERVER 已点击 (attempt {attempt})")
+                # 等待并处理可能出现的 NopeTCHA 验证码
+                if self.detect_nopecha_captcha(driver):
+                    self.wait_nopecha_solve(driver, timeout=90)
                 return True
             except Exception as e:
                 self.log(f"⚠️ RENEW SERVER 失败 (attempt {attempt}): {e}")
