@@ -2,6 +2,7 @@ import time
 import os
 import sys
 import random
+import zipfile
 import requests
 import platform
 from datetime import datetime
@@ -37,6 +38,9 @@ START_VERIFY_DIALOG = "div.el-dialog"
 MANAGEMENT_MENU = '//li[contains(@class,"el-sub-menu")]//span[text()="Management"]'
 CONSOLE_MENU_ITEM = '//li[contains(@class,"el-menu-item")]//span[text()="Console"]'
 PAGE_READY_INDICATOR = '//li[contains(@class,"el-menu-item")]'
+NOPECHA_EXT_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "nopecha_ext"
+)
 
 
 def parse_accounts(raw: str):
@@ -57,6 +61,26 @@ class BytenutRenewal:
         self.BASE_DIR = os.path.dirname(os.path.abspath(__file__))
         self.screenshot_dir = os.path.join(self.BASE_DIR, "artifacts")
         os.makedirs(self.screenshot_dir, exist_ok=True)
+
+    def _ensure_nopecha_extension(self):
+        if os.path.exists(NOPECHA_EXT_DIR):
+            self.log("[OK] NopeCHA 扩展已存在")
+            return NOPECHA_EXT_DIR
+        self.log("⏳ 下载 NopeCHA 扩展...")
+        url = "https://github.com/NopeCHALLC/nopecha-extension/releases/latest/download/chromium.zip"
+        try:
+            resp = requests.get(url, timeout=60)
+            zip_path = os.path.join(self.BASE_DIR, "chromium.zip")
+            with open(zip_path, "wb") as f:
+                f.write(resp.content)
+            with zipfile.ZipFile(zip_path, "r") as z:
+                z.extractall(NOPECHA_EXT_DIR)
+            os.remove(zip_path)
+            self.log(f"[OK] NopeCHA 扩展已下载 ({len(resp.content) // 1024} KB)")
+            return NOPECHA_EXT_DIR
+        except Exception as e:
+            self.log(f"[FAIL] NopeCHA 扩展下载失败: {e}")
+            return None
 
     # ========== 脱敏工具 ==========
     def mask_account(self, u):
@@ -560,7 +584,7 @@ class BytenutRenewal:
             return False
 
     def resolve_captcha(self, sb, timeout=90):
-        """通用验证码处理，支持 hCaptcha 和 Turnstile"""
+        """通用验证码处理，支持 hCaptcha 和 Turnstile（NopeCHA 扩展自动解）"""
         hc = self.is_hcaptcha_present(sb)
         tc = self.is_turnstile_present(sb)
 
@@ -568,10 +592,17 @@ class BytenutRenewal:
             self.log("[OK] 无验证码，跳过")
             return True
 
+        has_nopecha = os.path.exists(NOPECHA_EXT_DIR)
         captcha_type = "hCaptcha" if hc else "Turnstile"
-        self.log(f"⏳ 检测到 {captcha_type}，开始处理...")
+        self.log(f"⏳ 检测到 {captcha_type}，等待 NopeCHA 扩展自动解决..."
+                 if has_nopecha else
+                 f"⏳ 检测到 {captcha_type}，开始处理...")
         start = time.time()
         last_click = 0
+
+        # 如果装了 NopeCHA，前 20 秒不手动点击，让扩展工作
+        quiet_until = start + 20 if has_nopecha else start
+
         while time.time() - start < timeout:
             self.remove_overlay_ads(sb)
 
@@ -612,15 +643,14 @@ class BytenutRenewal:
                 except Exception:
                     pass
 
-            # 点击验证码
+            # NopeCHA 安静期过后，降级到手动点击
             now = time.time()
-            if now - last_click > 3:
+            if now > quiet_until and now - last_click > 3:
                 try:
                     sb.uc_gui_click_captcha()
                     last_click = now
                 except Exception:
                     pass
-                # 如果 uc_gui_click_captcha 失败，用 JS 直接 click
                 if self.is_hcaptcha_present(sb):
                     self._try_click_hcaptcha(sb)
 
@@ -1024,6 +1054,7 @@ class BytenutRenewal:
             masked_user = self.mask_account(user)
             self.log(f"==== 账号 [{idx}] {masked_user} ====")
 
+            ext_dir = self._ensure_nopecha_extension()
             with SB(
                 uc=True, test=True, headed=True,
                 chromium_arg=(
@@ -1032,6 +1063,7 @@ class BytenutRenewal:
                     "--disable-blink-features=AutomationControlled,"
                     "--disable-automation,"
                     "--no-first-run,--no-default-browser-check"
+                    + (f",--load-extension={ext_dir}" if ext_dir else "")
                 ),
                 proxy=PROXY,
             ) as sb:
