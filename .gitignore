@@ -1,3 +1,5 @@
 artifacts/
 __pycache__/
 *.pyc
+nopecha_ext/
+test_*.py

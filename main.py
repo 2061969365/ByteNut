@@ -654,6 +654,47 @@ class BytenutRenewal:
             self.log(f"  NopeCHA 扩展下载失败: {e}")
             return None
 
+    def _detect_chrome_version(self):
+        """自动检测 Chrome 主版本号，防止 ChromeDriver 版本不匹配"""
+        try:
+            import subprocess, re
+            if platform.system().lower() == "windows":
+                for key_path in [
+                    r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
+                    r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
+                ]:
+                    try:
+                        import winreg
+                        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path) as k:
+                            chrome_path = winreg.QueryValue(k, None)
+                            if chrome_path and os.path.isfile(chrome_path):
+                                cmd = ['powershell', '-c',
+                                       f'(Get-Item "{chrome_path}").VersionInfo.FileVersion']
+                                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                                m = re.search(r"(\d+)", result.stdout or "")
+                                if m:
+                                    v = int(m.group(1))
+                                    self.log(f"  Chrome 版本: {v}")
+                                    return v
+                    except:
+                        continue
+            else:
+                paths = ["google-chrome", "google-chrome-stable", "chromium-browser", "chromium"]
+                for p in paths:
+                    try:
+                        result = subprocess.run([p, "--version"], capture_output=True, text=True, timeout=5)
+                        m = re.search(r"(\d+)\.", result.stdout or "")
+                        if m:
+                            v = int(m.group(1))
+                            self.log(f"  Chrome 版本: {v}")
+                            return v
+                    except:
+                        continue
+        except:
+            pass
+        self.log("  Chrome 版本检测失败，使用默认")
+        return None
+
     def _is_visual_challenge_open(self, driver):
         """检测 hCaptcha visual challenge 是否已打开"""
         try:
@@ -1174,7 +1215,8 @@ class BytenutRenewal:
                 chrome_options.add_argument(f"--proxy-server={PROXY}")
             if ext_abspath:
                 chrome_options.add_argument(f"--load-extension={ext_abspath}")
-            driver = uc.Chrome(options=chrome_options)
+            chrome_version = self._detect_chrome_version()
+            driver = uc.Chrome(options=chrome_options, version_main=chrome_version)
             self._inject_stealth(driver)
             try:
                 logged_in = False
