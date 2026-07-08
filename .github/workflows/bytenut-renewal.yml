@@ -40,12 +40,9 @@ jobs:
             exit 0
           fi
 
-          wget -q https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
-          unzip -q Xray-linux-64.zip -d xray && chmod +x xray/xray
-
           python3 << 'PYEOF'
           import os, sys, json, base64
-          from urllib.parse import parse_qs, unquote, urlparse
+          from urllib.parse import parse_qs, unquote
 
           def mask(s):
               return f"{s[:2]}***{s[-2:]}" if len(s) > 4 else "****"
@@ -67,6 +64,12 @@ jobs:
           elif url.startswith("ss://"):
               protocol = "ss"
               content = url[5:]
+          elif url.startswith("hysteria2://") or url.startswith("hy2://"):
+              protocol = "hysteria2"
+              content = url.split("://", 1)[1]
+          elif url.startswith("tuic://"):
+              protocol = "tuic"
+              content = url[7:]
           elif url.startswith("socks5://") or url.startswith("socks://"):
               protocol = "socks5"
               content = url.split("://")[1].split("#")[0]
@@ -85,12 +88,14 @@ jobs:
           if "#" in content:
               content = content.rsplit("#", 1)[0]
 
+          # sing-box 统一配置模板
           config = {
-              "log": {"loglevel": "warning"},
-              "inbounds": [
-                  {"port": 1080, "listen": "127.0.0.1", "protocol": "socks", "settings": {"udp": True}},
-                  {"port": 1081, "listen": "127.0.0.1", "protocol": "http"}
-              ],
+              "log": {"level": "warning"},
+              "inbounds": [{
+                  "type": "mixed",
+                  "listen": "127.0.0.1",
+                  "listen_port": 1080
+              }],
               "outbounds": []
           }
 
@@ -100,12 +105,12 @@ jobs:
                   host_port, params_str = rest.split("?", 1)
               else:
                   host_port, params_str = rest, ""
-              
+
               if ":" in host_port:
                   address, port = host_port.rsplit(":", 1)
               else:
                   address, port = host_port, "443"
-              
+
               params = parse_qs(params_str)
               security = params.get("security", ["none"])[0]
               network = params.get("type", ["tcp"])[0]
@@ -113,53 +118,47 @@ jobs:
               fp = params.get("fp", ["chrome"])[0]
               flow = params.get("flow", [""])[0]
               pbk = params.get("pbk", [""])[0]
+              sid = params.get("sid", [""])[0]
               host = params.get("host", [sni])[0]
               path = unquote(params.get("path", ["/"])[0])
-              
+              alpn = params.get("alpn", [""])[0]
+
               print(f"[INFO] VLESS -> {mask(address)}:{port} (security: {security}, network: {network})")
-              
+
               outbound = {
-                  "protocol": "vless",
-                  "settings": {
-                      "vnext": [{
-                          "address": address,
-                          "port": int(port),
-                          "users": [{"id": uuid, "encryption": "none"}]
-                      }]
-                  },
-                  "streamSettings": {
-                      "network": network,
-                      "security": security
+                  "type": "vless",
+                  "server": address,
+                  "server_port": int(port),
+                  "uuid": uuid,
+                  "tls": {
+                      "enabled": security in ("tls", "reality"),
+                      "server_name": sni,
+                      "utls": {"enabled": True, "fingerprint": fp}
                   }
               }
-              
+
               if flow:
-                  outbound["settings"]["vnext"][0]["users"][0]["flow"] = flow
-              
+                  outbound["flow"] = flow
+
               if security == "reality":
-                  outbound["streamSettings"]["realitySettings"] = {
-                      "serverName": sni,
-                      "fingerprint": fp,
-                      "publicKey": pbk
+                  outbound["tls"]["reality"] = {
+                      "enabled": True,
+                      "public_key": pbk,
+                      "short_id": sid
                   }
-              elif security == "tls":
-                  outbound["streamSettings"]["tlsSettings"] = {
-                      "serverName": sni,
-                      "fingerprint": fp,
-                      "allowInsecure": False
-                  }
-              
+
               if network == "ws":
-                  outbound["streamSettings"]["wsSettings"] = {
+                  outbound["transport"] = {
+                      "type": "ws",
                       "path": path,
                       "headers": {"Host": host}
                   }
               elif network == "grpc":
-                  service_name = params.get("serviceName", [""])[0]
-                  outbound["streamSettings"]["grpcSettings"] = {
-                      "serviceName": service_name
+                  outbound["transport"] = {
+                      "type": "grpc",
+                      "service_name": params.get("serviceName", [""])[0]
                   }
-              
+
               config["outbounds"].append(outbound)
 
           elif protocol == "vmess":
@@ -172,48 +171,44 @@ jobs:
               except Exception as e:
                   print(f"[ERROR] VMess 解析失败: {e}")
                   sys.exit(1)
-              
+
               address = vm.get("add", "")
               port = int(vm.get("port", 443))
               uuid = vm.get("id", "")
-              aid = int(vm.get("aid", 0))
               network = vm.get("net", "tcp")
               tls = vm.get("tls", "")
               sni = vm.get("sni", "") or vm.get("host", address)
               host = vm.get("host", address)
               path = vm.get("path", "/")
               fp = vm.get("fp", "chrome")
-              
+
               print(f"[INFO] VMess -> {mask(address)}:{port} (network: {network}, tls: {tls})")
-              
+
               outbound = {
-                  "protocol": "vmess",
-                  "settings": {
-                      "vnext": [{
-                          "address": address,
-                          "port": port,
-                          "users": [{"id": uuid, "alterId": aid, "security": "auto"}]
-                      }]
-                  },
-                  "streamSettings": {
-                      "network": network,
-                      "security": "tls" if tls == "tls" else "none"
+                  "type": "vmess",
+                  "server": address,
+                  "server_port": port,
+                  "uuid": uuid,
+                  "security": "auto",
+                  "tls": {
+                      "enabled": tls == "tls",
+                      "server_name": sni,
+                      "utls": {"enabled": True, "fingerprint": fp}
                   }
               }
-              
-              if tls == "tls":
-                  outbound["streamSettings"]["tlsSettings"] = {
-                      "serverName": sni,
-                      "fingerprint": fp,
-                      "allowInsecure": False
-                  }
-              
+
               if network == "ws":
-                  outbound["streamSettings"]["wsSettings"] = {
+                  outbound["transport"] = {
+                      "type": "ws",
                       "path": path,
                       "headers": {"Host": host}
                   }
-              
+              elif network == "grpc":
+                  outbound["transport"] = {
+                      "type": "grpc",
+                      "service_name": vm.get("path", "").lstrip("/")
+                  }
+
               config["outbounds"].append(outbound)
 
           elif protocol == "trojan":
@@ -222,47 +217,45 @@ jobs:
                   host_port, params_str = rest.split("?", 1)
               else:
                   host_port, params_str = rest, ""
-              
+
               if ":" in host_port:
                   address, port = host_port.rsplit(":", 1)
               else:
                   address, port = host_port, "443"
-              
+
               params = parse_qs(params_str)
               sni = params.get("sni", [address])[0]
               network = params.get("type", ["tcp"])[0]
               host = params.get("host", [sni])[0]
               path = unquote(params.get("path", ["/"])[0])
               fp = params.get("fp", ["chrome"])[0]
-              
+
               print(f"[INFO] Trojan -> {mask(address)}:{port} (network: {network})")
-              
+
               outbound = {
-                  "protocol": "trojan",
-                  "settings": {
-                      "servers": [{
-                          "address": address,
-                          "port": int(port),
-                          "password": password
-                      }]
-                  },
-                  "streamSettings": {
-                      "network": network,
-                      "security": "tls",
-                      "tlsSettings": {
-                          "serverName": sni,
-                          "fingerprint": fp,
-                          "allowInsecure": False
-                      }
+                  "type": "trojan",
+                  "server": address,
+                  "server_port": int(port),
+                  "password": password,
+                  "tls": {
+                      "enabled": True,
+                      "server_name": sni,
+                      "utls": {"enabled": True, "fingerprint": fp}
                   }
               }
-              
+
               if network == "ws":
-                  outbound["streamSettings"]["wsSettings"] = {
+                  outbound["transport"] = {
+                      "type": "ws",
                       "path": path,
                       "headers": {"Host": host}
                   }
-              
+              elif network == "grpc":
+                  outbound["transport"] = {
+                      "type": "grpc",
+                      "service_name": params.get("serviceName", [""])[0]
+                  }
+
               config["outbounds"].append(outbound)
 
           elif protocol == "ss":
@@ -283,25 +276,18 @@ jobs:
               except Exception as e:
                   print(f"[ERROR] Shadowsocks 解析失败: {e}")
                   sys.exit(1)
-              
+
               print(f"[INFO] Shadowsocks -> {mask(address)}:{port}")
-              
-              outbound = {
-                  "protocol": "shadowsocks",
-                  "settings": {
-                      "servers": [{
-                          "address": address,
-                          "port": int(port),
-                          "method": method,
-                          "password": password
-                      }]
-                  }
-              }
-              
-              config["outbounds"].append(outbound)
+
+              config["outbounds"].append({
+                  "type": "shadowsocks",
+                  "server": address,
+                  "server_port": int(port),
+                  "method": method,
+                  "password": password
+              })
 
           elif protocol == "hysteria2":
-              # hysteria2://password@host:port?sni=xxx&insecure=1#name
               auth, rest = content.split("@", 1)
               if "?" in rest:
                   host_port, params_str = rest.split("?", 1)
@@ -319,39 +305,21 @@ jobs:
 
               print(f"[INFO] Hysteria2 -> {mask(address)}:{port} (sni: {sni})")
 
-              # 生成 sing-box JSON 配置
-              singbox_config = {
-                  "log": {"level": "warning"},
-                  "inbounds": [{
-                      "type": "mixed",
-                      "listen": "127.0.0.1",
-                      "listen_port": 1080
-                  }],
-                  "outbounds": [{
-                      "type": "hysteria2",
-                      "server": address,
-                      "server_port": int(port),
-                      "up_mbps": 100,
-                      "down_mbps": 100,
-                      "password": auth,
-                      "tls": {
-                          "enabled": True,
-                          "server_name": sni,
-                          "insecure": insecure
-                      }
-                  }]
-              }
-              with open("singbox_config.json", "w") as f:
-                  json.dump(singbox_config, f, indent=2)
-
-              with open("use_singbox.txt", "w") as f:
-                  f.write("hysteria2")
-
-              print("[INFO] ✅ Hysteria2 (sing-box) 配置已生成")
-              sys.exit(0)
+              config["outbounds"].append({
+                  "type": "hysteria2",
+                  "server": address,
+                  "server_port": int(port),
+                  "up_mbps": 100,
+                  "down_mbps": 100,
+                  "password": auth,
+                  "tls": {
+                      "enabled": True,
+                      "server_name": sni,
+                      "insecure": insecure
+                  }
+              })
 
           elif protocol == "tuic":
-              # tuic://uuid:password@host:port?congestion_control=bbr&sni=xxx&allow_insecure=1#name
               uuid_pass, rest = content.split("@", 1)
               if ":" in uuid_pass:
                   uuid, password = uuid_pass.split(":", 1)
@@ -375,42 +343,25 @@ jobs:
 
               print(f"[INFO] TUIC -> {mask(address)}:{port} (sni: {sni}, cc: {cc})")
 
-              # 生成 sing-box JSON 配置
-              singbox_config = {
-                  "log": {"level": "warning"},
-                  "inbounds": [{
-                      "type": "mixed",
-                      "listen": "127.0.0.1",
-                      "listen_port": 1080
-                  }],
-                  "outbounds": [{
-                      "type": "tuic",
-                      "server": address,
-                      "server_port": int(port),
-                      "uuid": uuid,
-                      "password": password,
-                      "congestion_control": cc,
-                      "udp_relay_mode": "native",
-                      "tls": {
-                          "enabled": True,
-                          "server_name": sni,
-                          "insecure": insecure
-                      }
-                  }]
-              }
-              with open("singbox_config.json", "w") as f:
-                  json.dump(singbox_config, f, indent=2)
+              config["outbounds"].append({
+                  "type": "tuic",
+                  "server": address,
+                  "server_port": int(port),
+                  "uuid": uuid,
+                  "password": password,
+                  "congestion_control": cc,
+                  "udp_relay_mode": "native",
+                  "tls": {
+                      "enabled": True,
+                      "server_name": sni,
+                      "insecure": insecure
+                  }
+              })
 
-              with open("use_singbox.txt", "w") as f:
-                  f.write("tuic")
-
-              print("[INFO] ✅ TUIC (sing-box) 配置已生成")
-              sys.exit(0)
-
-          with open("xray_config.json", "w") as f:
+          with open("singbox_config.json", "w") as f:
               json.dump(config, f, indent=2)
-          
-          print("[INFO] ✅ 代理配置已生成")
+
+          print(f"[INFO] ✅ {protocol.upper()} (sing-box) 配置已生成")
           PYEOF
 
           # 外部 SOCKS5 代理
@@ -422,37 +373,14 @@ jobs:
             exit 0
           fi
 
-          # Hysteria 2 / TUIC（sing-box 统一处理）
-          if [ -f "use_singbox.txt" ]; then
-            PROTO_NAME=$(cat use_singbox.txt)
-            echo "[INFO] 下载 sing-box（$PROTO_NAME 协议）..."
-            wget -q https://github.com/SagerNet/sing-box/releases/latest/download/sing-box-linux-amd64.tar.gz -O singbox.tar.gz
-            tar -xzf singbox.tar.gz
-            SINGBOX=$(find . -name "sing-box" -type f -path "*/sing-box*" | head -1)
-            chmod +x "$SINGBOX"
-            ./$SINGBOX run -c singbox_config.json > singbox.log 2>&1 &
-            sleep 8
-
-            echo "[INFO] 测试 $PROTO_NAME 代理连接..."
-            for i in 1 2 3 4 5; do
-              if curl -x socks5://127.0.0.1:1080 -s --max-time 15 https://api.ipify.org > /dev/null 2>&1; then
-                echo "proxy_server=socks5://127.0.0.1:1080" >> $GITHUB_OUTPUT
-                echo "use_proxy=true" >> $GITHUB_OUTPUT
-                echo "[INFO] ✅ $PROTO_NAME 代理连接成功"
-                exit 0
-              fi
-              echo "[WARN] $PROTO_NAME 尝试 $i/5..."
-              sleep 3
-            done
-            echo "[ERROR] ❌ $PROTO_NAME 代理连接失败，回退直连"
-            echo "use_proxy=false" >> $GITHUB_OUTPUT
-            echo "proxy_server=" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # 启动 Xray 并测试连通性
-          ./xray/xray run -c xray_config.json > xray.log 2>&1 &
-          sleep 5
+          # 下载并启动 sing-box
+          echo "[INFO] 下载 sing-box..."
+          wget -q https://github.com/SagerNet/sing-box/releases/latest/download/sing-box-linux-amd64.tar.gz -O singbox.tar.gz
+          tar -xzf singbox.tar.gz
+          SINGBOX=$(find . -name "sing-box" -type f -path "*/sing-box*" | head -1)
+          chmod +x "$SINGBOX"
+          ./$SINGBOX run -c singbox_config.json > singbox.log 2>&1 &
+          sleep 8
 
           echo "[INFO] 测试代理连接..."
           for i in 1 2 3 4 5; do
@@ -487,5 +415,3 @@ jobs:
         with:
           name: screenshots
           path: artifacts/
-
-
