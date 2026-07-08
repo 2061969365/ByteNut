@@ -563,10 +563,32 @@ class BytenutRenewal:
         """用 NopeCHA Token API 解 hCaptcha（免费，IP 限速 100/天）"""
         try:
             sitekey = sb.execute_script("""
-                var e = document.querySelector('.h-captcha');
-                return e ? (e.getAttribute('data-sitekey')
-                    || e.querySelector('iframe')?.getAttribute('data-sitekey')
-                    || '') : '';
+                var sk = '';
+                // 1. .h-captcha 的 data-sitekey
+                var el = document.querySelector('.h-captcha');
+                if (el) sk = el.getAttribute('data-sitekey') || '';
+                // 2. 任意元素上找 data-sitekey
+                if (!sk) {
+                    var all = document.querySelectorAll('[data-sitekey]');
+                    if (all.length) sk = all[0].getAttribute('data-sitekey') || '';
+                }
+                // 3. 从 iframe src 解析
+                if (!sk) {
+                    var ifr = document.querySelector('iframe[src*="hcaptcha"]');
+                    if (ifr) {
+                        var m = ifr.src.match(/[?&]sitekey=([^&]+)/);
+                        if (m) sk = decodeURIComponent(m[1]);
+                    }
+                }
+                // 4. 从 script 标签找 hcaptcha api url
+                if (!sk) {
+                    var sc = document.querySelector('script[src*="hcaptcha"]');
+                    if (sc) {
+                        var m = sc.src.match(/[?&]sitekey=([^&]+)/);
+                        if (m) sk = decodeURIComponent(m[1]);
+                    }
+                }
+                return sk;
             """)
             if not sitekey or len(sitekey) < 10:
                 self.log("  NopeCHA: 找不到 sitekey")
@@ -581,10 +603,21 @@ class BytenutRenewal:
             data = resp.json()
             token = data.get("data", "")
             if len(token) > 20:
+                # 用 CDP 注入 token，避免 JS 字符串转义问题
+                safe_token = token.replace("\\", "\\\\").replace("'", "\\'")
                 sb.execute_script(f"""
-                    var ta = document.querySelector('textarea[name="h-captcha-response"]');
-                    if (ta) {{ ta.value = '{token}'; }}
+                    var ta = document.querySelector('textarea[name="h-captcha-response"]'
+                        || 'input[name="h-captcha-response"]');
+                    if (ta) {{
+                        ta.value = '{safe_token}';
+                        ta.dispatchEvent(new Event('input', {{bubbles: true}}));
+                        ta.dispatchEvent(new Event('change', {{bubbles: true}}));
+                    }}
+                    // 触发 hCaptcha 回调
+                    if (window.__hcaptchaCallback) window.__hcaptchaCallback('{safe_token}');
+                    if (window.hcaptchaCallback) window.hcaptchaCallback('{safe_token}');
                 """)
+                time.sleep(1)
                 self.log("[OK] NopeCHA token 已注入")
                 return True
             self.log(f"  NopeCHA 失败: {resp.status_code} {data.get('message', '')}")
