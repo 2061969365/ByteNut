@@ -1329,8 +1329,8 @@ class BytenutRenewal:
                     # --- API 登录 ---
                     self.log("--- 尝试 API 登录 ---")
                     token = self.api_login(user, pwd)
-                if token:
-                    self.set_token_in_browser(driver, token)
+                    if token:
+                        self.set_token_in_browser(driver, token)
                     time.sleep(1)
                     driver.get(URL_HOMEPAGE)
                     time.sleep(6)
