@@ -1282,7 +1282,7 @@ class BytenutRenewal:
                 "--disable-blink-features=AutomationControlled",
                 "--disable-automation",
                 "--no-first-run", "--no-default-browser-check",
-                "--enable-logging=stderr", "--v=1",
+                "--enable-logging=stderr",
             ]:
                 chrome_options.add_argument(arg)
             if PROXY:
