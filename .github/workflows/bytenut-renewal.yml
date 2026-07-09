@@ -405,12 +405,6 @@ jobs:
           echo "use_proxy=false" >> $GITHUB_OUTPUT
           echo "proxy_server=" >> $GITHUB_OUTPUT
 
-      - name: 恢复 session 缓存
-        uses: actions/cache@v4
-        with:
-          path: session_cache
-          key: bytenut-session
-
       - name: 运行续期脚本
         env:
           BYTENUT: ${{ secrets.BYTENUT }}
@@ -428,9 +422,4 @@ jobs:
           name: screenshots
           path: artifacts/
 
-      - name: 保存 session 缓存
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: session_cache
-          key: bytenut-session
+

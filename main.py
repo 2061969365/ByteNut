@@ -17,7 +17,9 @@ if "DISPLAY" not in os.environ:
         except:
             pass
 
-from session_manager import SessionManager
+
+
+
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -174,49 +176,6 @@ class BytenutRenewal:
             self.log(f"TG发送失败: {e}")
 
     # ========== API 登录 ==========
-    API_LOGIN = "https://www.bytenut.com/api/auth/login"
-
-    def api_login(self, user, pwd):
-        """直接調用 API 登錄，返回 token；失敗返回 None"""
-        try:
-            sess = requests.Session()
-            sess.proxies.update({"http": PROXY, "https": PROXY}) if PROXY else None
-            sess.headers.update({
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                "Accept": "application/json, text/plain, */*",
-                "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
-                "Origin": "https://www.bytenut.com",
-                "Referer": "https://www.bytenut.com/auth/login",
-            })
-            sess.get("https://www.bytenut.com/auth/login", timeout=15)
-            resp = sess.post(
-                self.API_LOGIN,
-                json={"username": user, "password": pwd, "rememberMe": True},
-                timeout=30,
-            )
-            self.log(f"  API 响应状态码: {resp.status_code}")
-            body_text = resp.text[:1000]
-            self.log(f"  API 响应体: {body_text}")
-            data = resp.json()
-            code = data.get("code") or data.get("status")
-            if code and code == 200:
-                token = data.get("data", {}).get("token") or data.get("data", {}).get("yl-token")
-                if token:
-                    self.log(f"  API 登录成功，token 长度: {len(token)}")
-                    return token
-            self.log(f"  API 登录失败: {data.get('message', data.get('error', resp.status_code))}")
-        except Exception as e:
-            self.log(f"  API 登录异常: {e}")
-        return None
-
-    def set_token_in_browser(self, driver, token):
-        """在浏览器中设置登录 token"""
-        driver.execute_script(f"""
-            localStorage.setItem('yl-token', '{token}');
-            sessionStorage.setItem('yl-token', '{token}');
-        """)
-        self.log("  Token 已写入浏览器")
-
     # ========== 浏览器内 fetch（变量嵌入脚本）==========
     def fetch_api(self, driver, url, method="GET", referer=None):
         """
@@ -1320,147 +1279,119 @@ class BytenutRenewal:
             try:
                 logged_in = False
 
-                # --- Session 登录（优先） ---
-                self.log("--- 尝试 Session 登录 ---")
-                if SessionManager.load(driver, URL_HOMEPAGE, self.log):
-                    logged_in = True
-
-                if not logged_in:
-                    # --- API 登录 ---
-                    self.log("--- 尝试 API 登录 ---")
-                    token = self.api_login(user, pwd)
-                    if token:
-                        self.set_token_in_browser(driver, token)
-                    time.sleep(1)
-                    driver.get(URL_HOMEPAGE)
-                    time.sleep(6)
-                    time.sleep(5)
-                    current_token = driver.execute_script("""
-                        return localStorage.getItem('yl-token') 
-                            || sessionStorage.getItem('yl-token') || '';
+                # --- 浏览器登录 ---
+                self.log("--- 浏览器登录 ---")
+                driver.get(URL_LOGIN_PANEL)
+                time.sleep(5)
+                time.sleep(3)
+                self.dismiss_cookie_consent(driver)
+                time.sleep(1)
+                # 找用户名输入框
+                username_selectors = [
+                    'input[placeholder="Username"]',
+                    'input[placeholder*="username" i]',
+                    'input[placeholder*="Username"]',
+                    '.el-input__inner[type="text"]',
+                    'input[type="text"]',
+                ]
+                username_found = False
+                for sel in username_selectors:
+                    try:
+                        self.wait_visible(driver, sel, timeout=5)
+                        el = self.find(driver, sel)
+                        driver.execute_script("arguments[0].focus(); arguments[0].select();", el)
+                        for ch in user:
+                            el.send_keys(ch)
+                            time.sleep(random.uniform(0.04, 0.12))
+                        username_found = True
+                        self.log(f"  用户名输入框: {sel}")
+                        break
+                    except Exception:
+                        continue
+                if not username_found:
+                    self.log("[FAIL] ❌ 找不到用户名输入框")
+                    self.shot(driver, f"login_no_username_{idx}.png")
+                    has_error = True
+                    continue
+                # 找密码输入框
+                password_selectors = [
+                    'input[placeholder="Password"]',
+                    'input[placeholder*="password" i]',
+                    'input[placeholder*="Password"]',
+                    'input[type="password"]',
+                ]
+                for sel in password_selectors:
+                    try:
+                        self.wait_visible(driver, sel, timeout=3)
+                        el = self.find(driver, sel)
+                        driver.execute_script("arguments[0].focus(); arguments[0].select();", el)
+                        for ch in pwd:
+                            el.send_keys(ch)
+                            time.sleep(random.uniform(0.04, 0.12))
+                        driver.execute_script("arguments[0].blur();", el)
+                        self.log(f"  密码输入框: {sel}")
+                        break
+                    except Exception:
+                        continue
+                # 提交登录
+                time.sleep(1)
+                self.shot(driver, f"pre_login_{idx}.png")
+                submitted = False
+                for btn_sel in [
+                    '//button[contains(., "Sign In")]',
+                    '//button[contains(text(), "Sign In")]',
+                    '.el-button--primary',
+                    'button[type="submit"]',
+                ]:
+                    try:
+                        btn = self.find(driver, btn_sel)
+                        driver.execute_script("arguments[0].click();", btn)
+                        self.log(f"  提交: JS click {btn_sel}")
+                        submitted = True
+                        break
+                    except Exception:
+                        continue
+                if not submitted:
+                    try:
+                        self.find(driver, 'input[type="password"]').send_keys('\n')
+                        self.log("  提交: Enter 键")
+                        submitted = True
+                    except Exception:
+                        pass
+                if not submitted:
+                    try:
+                        driver.execute_script("""
+                            var form = document.querySelector('.el-form') || document.querySelector('form');
+                            if (form) form.dispatchEvent(new Event('submit', {bubbles: true}));
+                        """)
+                        self.log("  提交: JS form submit")
+                    except Exception:
+                        pass
+                time.sleep(10)
+                self.shot(driver, f"post_login_{idx}.png")
+                if "/auth/login" in driver.current_url:
+                    has_token = driver.execute_script("""
+                        var t = localStorage.getItem('yl-token') || sessionStorage.getItem('yl-token') || '';
+                        return t.length > 10;
                     """)
-                    if len(current_token) > 10:
-                        self.log("[OK] ✅ API 登录成功")
+                    if has_token:
+                        self.log("[OK] ✅ 有 token，认为登录成功")
                         logged_in = True
                     else:
-                        self.log("[FAIL] ⚠️ Token 设置未生效")
-                        has_error = True
-                if not logged_in:
-                    # --- 浏览器登录 ---
-                    self.log("--- 浏览器登录 ---")
-                    driver.get(URL_LOGIN_PANEL)
-                    time.sleep(5)
-                    time.sleep(3)
-                    self.dismiss_cookie_consent(driver)
-                    time.sleep(1)
-                    # 找用户名输入框
-                    username_selectors = [
-                        'input[placeholder="Username"]',
-                        'input[placeholder*="username" i]',
-                        'input[placeholder*="Username"]',
-                        '.el-input__inner[type="text"]',
-                        'input[type="text"]',
-                    ]
-                    username_found = False
-                    for sel in username_selectors:
-                        try:
-                            self.wait_visible(driver, sel, timeout=5)
-                            el = self.find(driver, sel)
-                            driver.execute_script("arguments[0].focus(); arguments[0].select();", el)
-                            for ch in user:
-                                el.send_keys(ch)
-                                time.sleep(random.uniform(0.04, 0.12))
-                            username_found = True
-                            self.log(f"  用户名输入框: {sel}")
-                            break
-                        except Exception:
-                            continue
-                    if not username_found:
-                        self.log("[FAIL] ❌ 找不到用户名输入框")
-                        self.shot(driver, f"login_no_username_{idx}.png")
+                        self.log("[FAIL] ❌ 浏览器登录失败")
+                        print("::error::" + masked_user + " 登录失败", flush=True)
+                        self.send_tg("❌", "登录失败", user, "未知",
+                                     "未知", "",
+                                     screenshot=self.shot(driver, f"login_fail_{idx}.png"))
                         has_error = True
                         continue
-                    # 找密码输入框
-                    password_selectors = [
-                        'input[placeholder="Password"]',
-                        'input[placeholder*="password" i]',
-                        'input[placeholder*="Password"]',
-                        'input[type="password"]',
-                    ]
-                    for sel in password_selectors:
-                        try:
-                            self.wait_visible(driver, sel, timeout=3)
-                            el = self.find(driver, sel)
-                            driver.execute_script("arguments[0].focus(); arguments[0].select();", el)
-                            for ch in pwd:
-                                el.send_keys(ch)
-                                time.sleep(random.uniform(0.04, 0.12))
-                            driver.execute_script("arguments[0].blur();", el)
-                            self.log(f"  密码输入框: {sel}")
-                            break
-                        except Exception:
-                            continue
-                    # 提交登录
-                    time.sleep(1)
-                    self.shot(driver, f"pre_login_{idx}.png")
-                    submitted = False
-                    for btn_sel in [
-                        '//button[contains(., "Sign In")]',
-                        '//button[contains(text(), "Sign In")]',
-                        '.el-button--primary',
-                        'button[type="submit"]',
-                    ]:
-                        try:
-                            btn = self.find(driver, btn_sel)
-                            driver.execute_script("arguments[0].click();", btn)
-                            self.log(f"  提交: JS click {btn_sel}")
-                            submitted = True
-                            break
-                        except Exception:
-                            continue
-                    if not submitted:
-                        try:
-                            self.find(driver, 'input[type="password"]').send_keys('\n')
-                            self.log("  提交: Enter 键")
-                            submitted = True
-                        except Exception:
-                            pass
-                    if not submitted:
-                        try:
-                            driver.execute_script("""
-                                var form = document.querySelector('.el-form') || document.querySelector('form');
-                                if (form) form.dispatchEvent(new Event('submit', {bubbles: true}));
-                            """)
-                            self.log("  提交: JS form submit")
-                        except Exception:
-                            pass
-                    time.sleep(10)
-                    self.shot(driver, f"post_login_{idx}.png")
-                    if "/auth/login" in driver.current_url:
-                        has_token = driver.execute_script("""
-                            var t = localStorage.getItem('yl-token') || sessionStorage.getItem('yl-token') || '';
-                            return t.length > 10;
-                        """)
-                        if has_token:
-                            self.log("[OK] ✅ 有 token，认为登录成功")
-                            logged_in = True
-                        else:
-                            self.log("[FAIL] ❌ 浏览器登录失败")
-                            print("::error::" + masked_user + " 登录失败", flush=True)
-                            self.send_tg("❌", "登录失败", user, "未知",
-                                         "未知", "",
-                                         screenshot=self.shot(driver, f"login_fail_{idx}.png"))
-                            has_error = True
-                            continue
-                    else:
-                        logged_in = True
-                    self.log("[OK] ✅ 登录成功")
-                    # 保存 session 供下次使用
-                    SessionManager.save(driver, self.log)
-                    # 停留 homepage
-                    driver.get(URL_HOMEPAGE)
-                    time.sleep(6)
-                    time.sleep(8)
+                else:
+                    logged_in = True
+                self.log("[OK] ✅ 登录成功")
+                # 停留 homepage
+                driver.get(URL_HOMEPAGE)
+                time.sleep(6)
+                time.sleep(8)
 
                 # --- 获取服务器信息 ---
                 servers = self.get_servers_data(driver)

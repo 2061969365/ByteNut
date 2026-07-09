@@ -1,5 +1,7 @@
 artifacts/
+screenshots/
 __pycache__/
 *.pyc
 nopecha_ext/
+nopecha_ext.zip
 test_*.py
