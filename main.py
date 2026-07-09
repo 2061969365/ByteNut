@@ -381,6 +381,29 @@ class BytenutRenewal:
         return False
 
     # ========== Stealth 指纹增强 ==========
+    def _setup_console_log_capture(self, driver):
+        """通过 CDP 启用浏览器日志捕获"""
+        try:
+            driver.execute_cdp_cmd('Log.enable', {})
+            self.log("[OK] CDP Log 已启用")
+        except Exception as e:
+            self.log(f"  Log.enable 失败: {e}")
+
+    def _print_extension_logs(self, driver):
+        """打印浏览器控制台日志（含扩展输出）"""
+        try:
+            logs = driver.get_log('browser')
+            for entry in logs:
+                msg = entry.get('message', '')
+                level = entry.get('level', '')
+                # 只打印与 nopecha / captcha 相关的日志
+                if any(kw in msg.lower() for kw in ['nopecha', 'captcha', 'hcaptcha',
+                                                       'token', 'error', 'fail', 'ban',
+                                                       'api', 'solve', 'recogni']):
+                    self.log(f"  [CONSOLE {level}] {msg[:200]}")
+        except Exception:
+            pass
+
     def _inject_stealth(self, driver):
         try:
             driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
@@ -765,10 +788,11 @@ class BytenutRenewal:
                 except Exception:
                     pass
 
-            # 每10秒输出一次等待状态
+            # 每10秒输出一次等待状态并打印扩展日志
             elapsed = int(time.time() - start)
             if elapsed > 0 and elapsed % 10 == 0:
                 self.log(f"  等待扩展解题中... {elapsed}s/{timeout}s")
+                self._print_extension_logs(driver)
 
             time.sleep(check_interval)
 
@@ -838,11 +862,12 @@ class BytenutRenewal:
             if not self.detect_nopecha_captcha(driver):
                 self.log("[OK] NopeTCHA 验证码已解决")
                 return True
-            # 每 5 秒检查一次
+            # 每 15 秒检查一次
             time.sleep(5)
             elapsed = int(time.time() - start)
             if elapsed % 15 == 0 and elapsed > 0:
                 self.log(f"  NopeTCHA 等待中... {elapsed}s/{timeout}s")
+                self._print_extension_logs(driver)
         self.log("[FAIL] NopeTCHA 验证码超时")
         return False
 
@@ -997,6 +1022,7 @@ class BytenutRenewal:
                 driver.execute_script("arguments[0].click();", el)
                 time.sleep(3)
                 self.log(f"✅ RENEW SERVER 已点击 (attempt {attempt})")
+                self._setup_console_log_capture(driver)
                 # 等待并处理可能出现的 NopeTCHA 验证码
                 if self.detect_nopecha_captcha(driver):
                     self.wait_nopecha_solve(driver, timeout=90)
@@ -1256,6 +1282,7 @@ class BytenutRenewal:
                 "--disable-blink-features=AutomationControlled",
                 "--disable-automation",
                 "--no-first-run", "--no-default-browser-check",
+                "--enable-logging=stderr", "--v=1",
             ]:
                 chrome_options.add_argument(arg)
             if PROXY:
