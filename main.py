@@ -38,6 +38,8 @@ API_START_STATUS = "https://www.bytenut.com/game-panel/api/serverStartQueue/stat
 RENEW_MENU = '//li[contains(., "RENEW SERVER")]'
 EXTEND_BTN = "button.extend-btn"
 START_BTN = "button.start-btn"
+START_BTN_ALT = '//button[contains(., "Start") and not(contains(., "Stop"))]'
+START_BTN_CARD = '//div[contains(@class,"card") or contains(@class,"btn")]//span[text()="Start"]/ancestor::button'
 START_VERIFY_DIALOG = "div.el-dialog"
 MANAGEMENT_MENU = '//li[contains(@class,"el-sub-menu")]//span[text()="Management"]'
 CONSOLE_MENU_ITEM = '//li[contains(@class,"el-menu-item")]//span[text()="Console"]'
@@ -1114,12 +1116,35 @@ class BytenutRenewal:
             except Exception as e:
                 self.log(f"Start/Stop 点击失败: {e}")
 
-        # Step 3: 等待 Start 按钮
-        try:
-            self.wait_present(driver, START_BTN, timeout=15)
-            self.log("✅ Start/Stop 页面就绪")
-        except Exception as e:
-            self.log(f"⚠️ 等待 Start 超时: {e}")
+        # Step 3: 等待 Start 按钮（尝试多种选择器）
+        start_btn = None
+        for sel in [START_BTN, START_BTN_ALT, START_BTN_CARD]:
+            try:
+                start_btn = self.wait_present(driver, sel, timeout=5)
+                self.log(f"✅ Start 按钮就绪 (selector: {sel})")
+                break
+            except Exception:
+                continue
+        if not start_btn:
+            # 最后用 JS 查找包含 "Start" 文字的可点击元素
+            try:
+                start_btn = driver.execute_script("""
+                    var els = document.querySelectorAll('button, div[role="button"], [class*="btn"]');
+                    for (var i = 0; i < els.length; i++) {
+                        var t = els[i].textContent.trim();
+                        if (t.indexOf('Start') !== -1 && t.indexOf('Stop') === -1
+                            && els[i].offsetHeight > 0) {
+                            return els[i];
+                        }
+                    }
+                    return null;
+                """)
+                if start_btn:
+                    self.log("✅ Start 按钮就绪 (JS fallback)")
+            except Exception:
+                pass
+        if not start_btn:
+            self.log("⚠️ 找不到 Start 按钮")
             self.shot(driver, f"no_start_btn_{idx}.png")
             return False, "no_start_btn"
 
@@ -1127,14 +1152,13 @@ class BytenutRenewal:
         self.log("▶️ 点击 Start...")
         self.remove_overlay_ads(driver)
         try:
-            btn = self.find(driver, START_BTN)
-            if btn.get_attribute("disabled"):
+            if start_btn.get_attribute("disabled"):
                 self.log("⚠️ Start disabled")
                 return False, "start_disabled"
             driver.execute_script(
-                "arguments[0].scrollIntoView({block:'center'});", btn)
+                "arguments[0].scrollIntoView({block:'center'});", start_btn)
             time.sleep(0.5)
-            driver.execute_script("arguments[0].click();", btn)
+            driver.execute_script("arguments[0].click();", start_btn)
             self.log("  Start 已点击")
             time.sleep(2)
         except Exception as e:
@@ -1283,7 +1307,6 @@ class BytenutRenewal:
                 "--disable-blink-features=AutomationControlled",
                 "--disable-automation",
                 "--no-first-run", "--no-default-browser-check",
-                "--enable-logging=stderr",
             ]:
                 chrome_options.add_argument(arg)
             if PROXY:
