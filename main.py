@@ -17,6 +17,7 @@ if "DISPLAY" not in os.environ:
         except:
             pass
 
+from session_manager import SessionManager
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -1318,7 +1319,14 @@ class BytenutRenewal:
             self._inject_stealth(driver)
             try:
                 logged_in = False
-                # --- API 登录 ---
+
+                # --- Session 登录（优先） ---
+                self.log("--- 尝试 Session 登录 ---")
+                if SessionManager.load(driver, URL_HOMEPAGE, self.log):
+                    logged_in = True
+
+                if not logged_in:
+                    # --- API 登录 ---
                 self.log("--- 尝试 API 登录 ---")
                 token = self.api_login(user, pwd)
                 if token:
@@ -1447,6 +1455,8 @@ class BytenutRenewal:
                     else:
                         logged_in = True
                     self.log("[OK] ✅ 登录成功")
+                    # 保存 session 供下次使用
+                    SessionManager.save(driver, self.log)
                     # 停留 homepage
                     driver.get(URL_HOMEPAGE)
                     time.sleep(6)
