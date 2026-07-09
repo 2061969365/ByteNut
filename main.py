@@ -41,6 +41,7 @@ START_BTN = "button.start-btn"
 START_VERIFY_DIALOG = "div.el-dialog"
 MANAGEMENT_MENU = '//li[contains(@class,"el-sub-menu")]//span[text()="Management"]'
 CONSOLE_MENU_ITEM = '//li[contains(@class,"el-menu-item")]//span[text()="Console"]'
+START_STOP_MENU_ITEM = '//li[contains(@class,"el-menu-item")]//span[text()="Start / Stop"]'
 PAGE_READY_INDICATOR = '//li[contains(@class,"el-menu-item")]'
 
 
@@ -1073,7 +1074,7 @@ class BytenutRenewal:
 
     # ========== UI 开机 ==========
     def ui_start_server(self, driver, server_id, idx):
-        self.log("🖥️ 导航到 Console 页面...")
+        self.log("🖥️ 导航到 Start/Stop 页面...")
         self.navigate_to_panel(driver, server_id)
 
         # Step 1: 展开 Management
@@ -1095,28 +1096,28 @@ class BytenutRenewal:
                 self.log(f"Management 展开失败: {e}")
                 return False, "management_fail"
 
-        # Step 2: 点击 Console
-        self.log("🖥️ 点击 Console...")
+        # Step 2: 点击 Start / Stop
+        self.log("🖥️ 点击 Start / Stop...")
         try:
-            self.click(driver, CONSOLE_MENU_ITEM)
+            self.click(driver, START_STOP_MENU_ITEM)
             time.sleep(3)
         except Exception:
             try:
                 driver.execute_script("""
                     document.querySelectorAll('.el-menu-item span')
                     .forEach(function(el){
-                        if (el.textContent.trim() === 'Console')
+                        if (el.textContent.trim() === 'Start / Stop')
                             el.closest('.el-menu-item').click();
                     });
                 """)
                 time.sleep(3)
             except Exception as e:
-                self.log(f"Console 点击失败: {e}")
+                self.log(f"Start/Stop 点击失败: {e}")
 
         # Step 3: 等待 Start 按钮
         try:
             self.wait_present(driver, START_BTN, timeout=15)
-            self.log("✅ Console 页面就绪")
+            self.log("✅ Start/Stop 页面就绪")
         except Exception as e:
             self.log(f"⚠️ 等待 Start 超时: {e}")
             self.shot(driver, f"no_start_btn_{idx}.png")
